@@ -1,0 +1,35 @@
+*.iml
+.gradle/
+.kotlin/
+.idea/
+.vscode/
+.agents/
+local.properties
+build/
+captures/
+.externalNativeBuild/
+.cxx/
+app/release/
+.apk_inspect/
+.cubism-sdk/
+CubismSdkForJava-*.zip
+.verification-build*/
+
+# Local development notes and one-off audit output
+dev_notice.md
+all_zh_strings.txt
+*_gaps.txt
+*_keys.txt
+*_src_keys*.txt
+
+# Build artifacts are published through Releases, not committed to Git
+*.apk
+*.aab
+*.apks
+*.log
+
+# Signing credentials must never be committed
+/signing/
+*.jks
+*.keystore
+keystore.properties

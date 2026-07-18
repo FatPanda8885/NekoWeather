@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">NekoWeather</string>
+    <string name="app_name_global">NekoWeather</string>
+    <string name="app_name_chinese">猫猫风雨</string>
+</resources>
