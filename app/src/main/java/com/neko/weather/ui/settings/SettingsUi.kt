@@ -3,6 +3,7 @@ package com.neko.weather.ui.settings
 import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
@@ -14,15 +15,19 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LocalTextStyle
@@ -31,14 +36,17 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
-import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.compositionLocalOf
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -46,6 +54,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.neko.weather.ui.Text
 
 /** Marks the settings component DSL so nested scopes stay unambiguous. */
 @DslMarker
@@ -80,6 +89,37 @@ private fun SettingsRowFrame(content: @Composable () -> Unit) {
     }
 }
 
+/** Circled info icon that reveals [text] in a popup anchored next to it. */
+@Composable
+fun InfoHint(text: String, modifier: Modifier = Modifier) {
+    var expanded by remember { mutableStateOf(false) }
+    val colorScheme = MaterialTheme.colorScheme
+    Box(modifier) {
+        Box(
+            modifier = Modifier
+                .size(28.dp)
+                .clip(CircleShape)
+                .clickable { expanded = !expanded },
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                imageVector = Icons.Outlined.Info,
+                contentDescription = "说明",
+                tint = colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(18.dp),
+            )
+        }
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            Text(
+                text = text,
+                fontSize = 13.sp,
+                color = colorScheme.onSurface,
+                modifier = Modifier.widthIn(max = 260.dp).padding(horizontal = 14.dp, vertical = 10.dp),
+            )
+        }
+    }
+}
+
 /** Row factory for one settings page section. */
 @SettingsDsl
 class SettingsScope internal constructor() {
@@ -90,19 +130,14 @@ class SettingsScope internal constructor() {
         val colorScheme = MaterialTheme.colorScheme
         val counter = remember { RowSlotCounter() }
         Column(modifier = Modifier.fillMaxWidth()) {
-            Text(
-                text = title,
-                fontSize = 13.sp,
-                fontWeight = FontWeight.SemiBold,
-                color = colorScheme.primary,
-            )
-            if (description != null) {
-                Spacer(Modifier.height(4.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    text = description,
-                    fontSize = 12.sp,
-                    color = colorScheme.onSurfaceVariant,
+                    text = title,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = colorScheme.primary,
                 )
+                description?.let { InfoHint(it) }
             }
             Spacer(Modifier.height(8.dp))
             Card(
@@ -129,6 +164,7 @@ class SettingsScope internal constructor() {
         trailing: (@Composable () -> Unit)? = null,
         showChevron: Boolean = false,
         onClick: (() -> Unit)? = null,
+        hint: String? = null,
     ) {
         val colorScheme = MaterialTheme.colorScheme
         SettingsRowFrame {
@@ -160,6 +196,7 @@ class SettingsScope internal constructor() {
                         )
                     }
                 }
+                hint?.let { InfoHint(it) }
                 if (trailingText != null) {
                     Spacer(Modifier.width(8.dp))
                     Text(
@@ -193,6 +230,7 @@ class SettingsScope internal constructor() {
         checked: Boolean,
         onCheckedChange: (Boolean) -> Unit,
         enabled: Boolean = true,
+        hint: String? = null,
     ) {
         val colorScheme = MaterialTheme.colorScheme
         SettingsRowFrame {
@@ -215,6 +253,7 @@ class SettingsScope internal constructor() {
                         )
                     }
                 }
+                hint?.let { InfoHint(it) }
                 Spacer(Modifier.width(12.dp))
                 Switch(
                     checked = checked,
@@ -334,6 +373,7 @@ class SettingsScope internal constructor() {
         minLines: Int = 1,
         monospace: Boolean = false,
         password: Boolean = false,
+        hint: String? = null,
     ) {
         val textStyle = if (monospace) {
             MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace)
@@ -353,7 +393,12 @@ class SettingsScope internal constructor() {
                     .fillMaxWidth()
                     .padding(horizontal = 16.dp, vertical = 8.dp),
                 textStyle = textStyle,
-                label = { Text(text = label) },
+                label = {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(text = label)
+                        hint?.let { InfoHint(it) }
+                    }
+                },
                 supportingText = support,
                 isError = isError,
                 visualTransformation = if (password) {
@@ -374,35 +419,42 @@ class SettingsScope internal constructor() {
         onClick: () -> Unit,
         enabled: Boolean = true,
         emphasis: ActionEmphasis = ActionEmphasis.OUTLINED,
+        hint: String? = null,
     ) {
-        val rowModifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 8.dp)
         SettingsRowFrame {
-            when (emphasis) {
-                ActionEmphasis.PRIMARY -> Button(
-                    onClick = onClick,
-                    modifier = rowModifier,
-                    enabled = enabled,
-                ) {
-                    Text(text = label)
-                }
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                val buttonModifier = Modifier.weight(1f)
+                when (emphasis) {
+                    ActionEmphasis.PRIMARY -> Button(
+                        onClick = onClick,
+                        modifier = buttonModifier,
+                        enabled = enabled,
+                    ) {
+                        Text(text = label)
+                    }
 
-                ActionEmphasis.OUTLINED -> OutlinedButton(
-                    onClick = onClick,
-                    modifier = rowModifier,
-                    enabled = enabled,
-                ) {
-                    Text(text = label)
-                }
+                    ActionEmphasis.OUTLINED -> OutlinedButton(
+                        onClick = onClick,
+                        modifier = buttonModifier,
+                        enabled = enabled,
+                    ) {
+                        Text(text = label)
+                    }
 
-                ActionEmphasis.TEXT -> TextButton(
-                    onClick = onClick,
-                    modifier = rowModifier,
-                    enabled = enabled,
-                ) {
-                    Text(text = label)
+                    ActionEmphasis.TEXT -> TextButton(
+                        onClick = onClick,
+                        modifier = buttonModifier,
+                        enabled = enabled,
+                    ) {
+                        Text(text = label)
+                    }
                 }
+                hint?.let { InfoHint(it) }
             }
         }
     }
@@ -420,6 +472,23 @@ class SettingsScope internal constructor() {
                     .fillMaxWidth()
                     .padding(horizontal = 16.dp, vertical = 8.dp),
             )
+        }
+    }
+
+    /** Renders a section label without a container; [hint] hides behind an info icon. */
+    @Composable
+    fun SectionLabel(title: String, hint: String? = null) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = title,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.primary,
+            )
+            hint?.let { InfoHint(it) }
         }
     }
 

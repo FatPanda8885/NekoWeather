@@ -24,7 +24,8 @@ private val ENGLISH_REPLACEMENTS = listOf(
     "请滚动至文末后继续" to "Scroll to the end to continue",
     "同意并继续" to "Agree and continue", "请完整阅读" to "Read the full document", "关闭" to "Close",
     "文件读取失败" to "Failed to read document",
-    "API Key 存储在应用私有 SharedPreferences 中，但尚未使用 Android Keystore 加密；请勿在截图或导出的配置中泄露。" to "API keys are stored in private SharedPreferences but are not yet encrypted with Android Keystore. Do not expose them in screenshots or exported configurations.",
+    "API Key 未加密存储，请勿在截图或分享配置时泄露。" to "API keys are stored unencrypted. Do not expose them in screenshots or shared configurations.",
+    "说明" to "About this setting",
     "API Key 和 AI Key 可能包含在“设置”备份中，请妥善保存备份文件。" to "API and AI keys may be included in a Settings backup. Store backup files securely.",
     "打开“主页”开关后，可在天气主页的大温度区域左右滑动切换。" to "Enable Home, then swipe across the large temperature area to switch cities.",
     "导入 VITS/Piper ONNX ZIP 模型包，根目录需包含 manifest.json、model.onnx、tokens.txt。" to "Import a VITS/Piper ONNX ZIP containing manifest.json, model.onnx and tokens.txt at its root.",
@@ -32,7 +33,6 @@ private val ENGLISH_REPLACEMENTS = listOf(
     "今日 ${'$'}{summary.daily} · 本周 ${'$'}{summary.weekly} · 本月 ${'$'}{summary.monthly}" to "Today ${'$'}{summary.daily} · This week ${'$'}{summary.weekly} · This month ${'$'}{summary.monthly}",
     "请求会同时发送 x-api-key、Authorization Bearer 和 anthropic-version 请求头，以兼容官方 API 与常见网关。" to "Requests send x-api-key, Authorization Bearer and anthropic-version headers for compatibility with official APIs and common gateways.",
     "请求在发送前计数；达到任一已开启上限后，该供应商的新请求会被阻止。不同域名和内容类别分别统计。" to "Requests are counted before sending. New requests are blocked when an enabled limit is reached; domains and content categories are tracked separately.",
-    "填入 DeepSeek 基础地址时也会自动补全 /anthropic/v1/messages。" to "A DeepSeek base URL is automatically completed with /anthropic/v1/messages.",
     "新增预警供应商模板" to "Add alert-provider template",
     "需要在 AppGallery Connect 中启用 Map Kit；为空时自动回退 OSM。" to "Enable Map Kit in AppGallery Connect. If empty, OSM is used.",
     "需要在高德控制台申请“Web 服务 API”类型 Key；为空时自动回退 OSM。" to "Create a Web Service API key in the Amap console. If empty, OSM is used.",
@@ -89,7 +89,6 @@ private val ENGLISH_REPLACEMENTS = listOf(
     "拖动图片调整裁切区域，双指可缩放和旋转。" to "Drag to crop; pinch to zoom and rotate.",
     "支持动作、表情、物理、呼吸、眨眼、触摸视线与点击反馈。模型资源仍单独导入，不会打进安装包。" to "Supports motions, expressions, physics, breathing, blinking, gaze and tap feedback. Models are imported separately.",
     "可导入多个 ZIP 模型包并随时切换。必须包含 .model3.json、.moc3 和纹理；preview.png 为可选列表封面。" to "Import multiple ZIP models and switch anytime. A .model3.json, .moc3 and textures are required; preview.png is optional.",
-    "Android 不允许应用直接替换已安装入口图标；这里会创建指向本应用的自定义桌面快捷方式。" to "Android cannot replace the installed launcher icon; this creates a custom shortcut instead.",
     "一次配置 GeoAPI、天气、空气质量和气象预警。" to "Configure GeoAPI, weather, air quality and alerts together.",
     "实验性功能，可能会造成卡顿" to "Experimental feature; may cause stuttering",
     "API 请求次数统计与限制" to "API usage & limits",
@@ -299,7 +298,6 @@ private val ENGLISH_REPLACEMENTS = listOf(
     "当前城市降雨云图" to "Rain radar for current city",
     "当前数据源未提供空气质量" to "The current source provides no air-quality data",
     "当前太阳高度角" to "Current solar elevation",
-    "当前天气朗读使用系统 TTS；ONNX 推理将在 sherpa-onnx 运行库接入后启用。" to "Weather reading currently uses system TTS; ONNX inference will be enabled after sherpa-onnx integration.",
     "额外查询参数" to "Extra query parameters",
     "发送前会替换占位符并再次校验" to "Placeholders are substituted and validated before sending",
     "风速 JSON 路径" to "Wind-speed JSON path",
@@ -564,7 +562,7 @@ private fun toJapanese(source: String): String {
 }
 
 private val JAPANESE_REPLACEMENTS = listOf(
-    "第三方内容使用说明" to "第三者コンテンツ利用規約", "GNU GPLv3 开源协议" to "GNU GPLv3ライセンス",
+    "第三方内容使用说明" to "第三者コンテンツ利用規約", "GNU GPLv3 开源协议" to "GNU GPLv3ライセンス", "说明" to "説明を表示",
     "请滚动至文末后继续" to "最後までスクロールして続行してください", "同意并继续" to "同意して続行",
     "请完整阅读" to "全文をお読みください", "关闭" to "閉じる", "文件读取失败" to "文書を読み込めませんでした",
     "系统 TTS · 已导入 " to "システムTTS・インポート済み ", " 个离线模型" to "個のオフラインモデル",

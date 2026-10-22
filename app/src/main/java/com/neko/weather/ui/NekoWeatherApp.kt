@@ -192,7 +192,6 @@ import com.neko.weather.model.TemperatureUnit
 import com.neko.weather.model.WindSpeedUnit
 import com.neko.weather.model.AppLanguage
 import com.neko.weather.data.ConfigStore
-import com.neko.weather.live2d.CubismRuntime
 import com.neko.weather.live2d.Live2dModel
 import com.neko.weather.data.ApiUsageTracker
 import com.neko.weather.data.ApiQuota
@@ -2631,7 +2630,6 @@ private fun AppearancePage(
             )
             if (state.customization.appIconPath.isNotBlank()) {
                 ActionRow(label = "添加自定义图标到桌面", onClick = viewModel::createDesktopShortcut)
-                NoteRow("Android 不允许应用直接替换已安装入口图标；这里会创建指向本应用的自定义桌面快捷方式。")
             }
             Entry(
                 title = if (state.customization.backgroundPath.isNotBlank() && !state.customization.backgroundIsVideo) "更换静态背景" else "选择静态背景",
@@ -2672,18 +2670,18 @@ private fun AppearancePage(
                 )
             }
         }
-        Group(title = "Live2D", description = "实验性功能，可能会造成卡顿") {
+        Group("Live2D") {
+            NoteRow("实验性功能，可能会造成卡顿", isError = true)
             SwitchRow(
                 title = "启用 Live2D",
                 checked = state.customization.live2dEnabled,
                 onCheckedChange = viewModel::setLive2dEnabled,
+                hint = "支持动作、表情、物理、呼吸、眨眼、触摸视线与点击反馈。模型资源仍单独导入，不会打进安装包。",
             )
-            NoteRow("Cubism 运行时：${CubismRuntime.displayName}")
-            NoteRow("支持动作、表情、物理、呼吸、眨眼、触摸视线与点击反馈。模型资源仍单独导入，不会打进安装包。")
-            NoteRow("可导入多个 ZIP 模型包并随时切换。必须包含 .model3.json、.moc3 和纹理；preview.png 为可选列表封面。")
             ActionRow(
                 label = "导入新模型",
                 onClick = { live2dPicker.launch(arrayOf("application/zip", "application/octet-stream")) },
+                hint = "可导入多个 ZIP 模型包并随时切换。必须包含 .model3.json、.moc3 和纹理；preview.png 为可选列表封面。",
             )
             state.customization.live2dModels.forEach { model ->
                 SeparatorRow()
@@ -2864,7 +2862,6 @@ private fun AiSettingsPage(state: MainUiState, viewModel: MainViewModel, modifie
                     )
                 },
             )
-            NoteRow("填入 DeepSeek 基础地址时也会自动补全 /anthropic/v1/messages。")
             TextFieldRow(
                 label = "API Key",
                 value = config.apiKey,
@@ -2905,7 +2902,6 @@ private fun AiSettingsPage(state: MainUiState, viewModel: MainViewModel, modifie
                 singleLine = false,
                 minLines = 3,
             )
-            NoteRow("可用占位符：{{model_json}}、{{max_tokens}}、{{context_json}}、{{weather_json}}")
             TextFieldRow(
                 label = "请求体",
                 value = config.rawRequestJson,
@@ -2915,6 +2911,7 @@ private fun AiSettingsPage(state: MainUiState, viewModel: MainViewModel, modifie
                 singleLine = false,
                 minLines = 10,
                 monospace = true,
+                hint = "可用占位符：{{model_json}}、{{max_tokens}}、{{context_json}}、{{weather_json}}",
             )
             ActionRow(
                 label = "恢复默认请求 JSON",
@@ -2928,7 +2925,7 @@ private fun AiSettingsPage(state: MainUiState, viewModel: MainViewModel, modifie
                 enabled = config.endpoint.startsWith("https://") && config.model.isNotBlank() && jsonError == null && maxTokensValue in 64..8192 && maxCharactersValue in 100..10000,
                 emphasis = ActionEmphasis.PRIMARY,
             )
-            NoteRow("API Key 存储在应用私有 SharedPreferences 中，但尚未使用 Android Keystore 加密；请勿在截图或导出的配置中泄露。", isError = true)
+            NoteRow("API Key 未加密存储，请勿在截图或分享配置时泄露。", isError = true)
         }
     }
 }
@@ -3047,7 +3044,7 @@ private fun ApiConfigPage(state: MainUiState, viewModel: MainViewModel, openStat
             )
         }
         Group("天气供应商") {
-            NoteRow("预设")
+            SectionLabel("预设")
             profiles.weather.filter { it.builtIn }.forEach { profile ->
                 Entry(
                     title = profile.name,
@@ -3056,7 +3053,7 @@ private fun ApiConfigPage(state: MainUiState, viewModel: MainViewModel, openStat
                     onClick = { viewModel.selectWeatherProvider(profile.id) },
                 )
             }
-            NoteRow("我的模板")
+            SectionLabel("我的模板")
             profiles.weather.filterNot { it.builtIn }.forEach { profile ->
                 Entry(
                     title = profile.name,
@@ -3260,9 +3257,7 @@ private fun ApiUsagePage(modifier: Modifier = Modifier) {
     var revision by remember { mutableIntStateOf(0) }
     val summaries = remember(revision) { ApiUsageTracker.summaries() }
     SettingsPanel(modifier) {
-        Group("说明") {
-            NoteRow("请求在发送前计数；达到任一已开启上限后，该供应商的新请求会被阻止。不同域名和内容类别分别统计。")
-        }
+        SectionLabel("请求配额", hint = "请求在发送前计数；达到任一已开启上限后，该供应商的新请求会被阻止。不同域名和内容类别分别统计。")
         if (summaries.isEmpty()) {
             Group("记录") {
                 NoteRow("尚无 API 请求记录，刷新一次天气后即可看到。")
@@ -3334,10 +3329,10 @@ private fun VoicePage(state: MainUiState, viewModel: MainViewModel, modifier: Mo
             )
         }
         Group("离线自定义音色") {
-            NoteRow("导入 VITS/Piper ONNX ZIP 模型包，根目录需包含 manifest.json、model.onnx、tokens.txt。")
             ActionRow(
                 label = "导入模型包",
                 onClick = { importer.launch(arrayOf("application/zip", "application/octet-stream")) },
+                hint = "导入 VITS/Piper ONNX ZIP 模型包，根目录需包含 manifest.json、model.onnx、tokens.txt。",
             )
             if (state.importedModels.isEmpty()) NoteRow("尚未导入离线音色")
             state.importedModels.forEach { model ->
@@ -3351,7 +3346,6 @@ private fun VoicePage(state: MainUiState, viewModel: MainViewModel, modifier: Mo
                     },
                 )
             }
-            NoteRow("当前天气朗读使用系统 TTS；ONNX 推理将在 sherpa-onnx 运行库接入后启用。", isError = true)
         }
     }
 }
