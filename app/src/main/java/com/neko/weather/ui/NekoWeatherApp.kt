@@ -247,8 +247,9 @@ private object SettingsPageId {
 }
 
 private fun parentPageOf(page: Int): Int = when (page) {
-    SettingsPageId.AI_EDITOR -> SettingsPageId.AI
     SettingsPageId.LIVE2D_EDITOR -> SettingsPageId.APPEARANCE
+    SettingsPageId.AI_EDITOR -> SettingsPageId.AI
+    SettingsPageId.API_USAGE -> SettingsPageId.PROVIDERS
     in SettingsPageId.CHILD_PAGES -> SettingsPageId.ROOT
     else -> 0
 }
@@ -3017,7 +3018,6 @@ private fun AiProfileEditorPage(
         maxCharactersValue != null && maxCharactersValue in 100..10000 &&
         jsonError == null
     SettingsPanel(modifier) {
-        SectionLabel(if (editingId == null) "新增模型" else "编辑模型")
         Group("基本信息") {
             ChoiceRow(
                 label = "协议",
@@ -3189,6 +3189,7 @@ private fun ApiConfigPage(state: MainUiState, viewModel: MainViewModel, openStat
                 description = "按供应商分别统计日、周、月请求次数",
                 showChevron = true,
                 onClick = openStats,
+                hint = "请求在发送前计数；达到任一已开启上限后，该供应商的新请求会被阻止。不同域名和内容类别分别统计。",
             )
         }
         Group(
@@ -3455,7 +3456,6 @@ private fun ApiUsagePage(modifier: Modifier = Modifier) {
     var revision by remember { mutableIntStateOf(0) }
     val summaries = remember(revision) { ApiUsageTracker.summaries() }
     SettingsPanel(modifier) {
-        SectionLabel("请求配额", hint = "请求在发送前计数；达到任一已开启上限后，该供应商的新请求会被阻止。不同域名和内容类别分别统计。")
         if (summaries.isEmpty()) {
             Group("记录") {
                 NoteRow("尚无 API 请求记录，刷新一次天气后即可看到。")
