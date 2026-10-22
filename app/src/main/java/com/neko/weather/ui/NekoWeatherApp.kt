@@ -2445,7 +2445,8 @@ private fun AboutPage(state: MainUiState, viewModel: MainViewModel, modifier: Mo
             text = {
                 Box(
                     Modifier.fillMaxWidth().height(520.dp).clip(RoundedCornerShape(14.dp))
-                        .background(Color(0xFF20252D)).verticalScroll(documentScroll).padding(14.dp),
+                        .background(MaterialTheme.colorScheme.surfaceVariant)
+                        .verticalScroll(documentScroll).padding(14.dp),
                 ) {
                     CompositionLocalProvider(LocalAppLanguage provides AppLanguage.SIMPLIFIED_CHINESE) {
                         MarkdownText(document)

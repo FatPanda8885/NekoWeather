@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -53,6 +54,8 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.neko.weather.ui.Text
@@ -182,7 +185,7 @@ class SettingsScope internal constructor() {
                         },
                     )
                     .defaultMinSize(minHeight = 56.dp)
-                    .padding(horizontal = 16.dp),
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 if (icon != null) {
@@ -195,12 +198,13 @@ class SettingsScope internal constructor() {
                     Spacer(Modifier.width(14.dp))
                 }
                 Column(modifier = Modifier.weight(1f)) {
-                    Text(text = title, fontSize = 15.sp)
+                    Text(text = title, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
                     if (description != null) {
                         Spacer(Modifier.height(2.dp))
                         Text(
                             text = description,
                             fontSize = 12.sp,
+                            lineHeight = 14.sp,
                             color = colorScheme.onSurfaceVariant,
                         )
                     }
@@ -248,16 +252,17 @@ class SettingsScope internal constructor() {
                     .fillMaxWidth()
                     .then(if (enabled) Modifier.clickable { onCheckedChange(!checked) } else Modifier)
                     .defaultMinSize(minHeight = 56.dp)
-                    .padding(horizontal = 16.dp),
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Column(modifier = Modifier.weight(1f)) {
-                    Text(text = title, fontSize = 15.sp)
+                    Text(text = title, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
                     if (description != null) {
                         Spacer(Modifier.height(2.dp))
                         Text(
                             text = description,
                             fontSize = 12.sp,
+                            lineHeight = 14.sp,
                             color = colorScheme.onSurfaceVariant,
                         )
                     }
@@ -349,6 +354,7 @@ class SettingsScope internal constructor() {
                                 OutlinedButton(
                                     onClick = { onSelect(option.key) },
                                     modifier = Modifier.weight(1f),
+                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 10.dp),
                                     colors = if (option.key == selected) {
                                         ButtonDefaults.outlinedButtonColors(
                                             containerColor = colorScheme.primaryContainer,
@@ -357,7 +363,14 @@ class SettingsScope internal constructor() {
                                         ButtonDefaults.outlinedButtonColors()
                                     },
                                 ) {
-                                    Text(text = option.label, fontSize = 12.sp)
+                                    Text(
+                                        text = option.label,
+                                        fontSize = 12.sp,
+                                        textAlign = TextAlign.Center,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.fillMaxWidth(),
+                                    )
                                 }
                             }
                             repeat(perRow - chunk.size) {
