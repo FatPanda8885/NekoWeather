@@ -63,7 +63,8 @@ android {
 
     buildFeatures.compose = true
 
-    sourceSets["main"].java.srcDir("src/cubism/java")
+    val hasCubismSdk = rootProject.findProject(":cubismFramework") != null
+    sourceSets["main"].java.srcDir(if (hasCubismSdk) "src/cubism/java" else "src/lite/java")
 
     packaging.resources.excludes += "/META-INF/{AL2.0,LGPL2.1}"
 }
