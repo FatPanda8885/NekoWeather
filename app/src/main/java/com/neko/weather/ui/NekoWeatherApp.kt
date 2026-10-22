@@ -1336,6 +1336,10 @@ private fun Advice(icon: ImageVector, title: String, text: String) {
     }
 }
 
+private const val AI_REVEAL_STAGGER_MS = 34f
+private const val AI_REVEAL_FADE_CHARS = 4
+private const val AI_REVEAL_FADE_MS = AI_REVEAL_STAGGER_MS * AI_REVEAL_FADE_CHARS
+
 @Composable
 private fun AiAdviceCard(
     advice: String?,
@@ -1344,22 +1348,30 @@ private fun AiAdviceCard(
     onRequest: () -> Unit,
     onClear: () -> Unit,
 ) {
-    var visibleCharacters by remember(advice) { mutableIntStateOf(0) }
     var expanded by rememberSaveable { mutableStateOf(true) }
-    val characterAlpha = remember(advice) { Animatable(1f) }
+    // 所有字符的透明度都由这一个「已流逝毫秒」时钟推导：每字错峰 AI_REVEAL_STAGGER_MS 启动、
+    // 各自用 AI_REVEAL_FADE_MS 淡入，于是任一时刻约有 AI_REVEAL_FADE_CHARS 个字同时在渐变。
+    val revealElapsed = remember(advice) { Animatable(0f) }
     LaunchedEffect(advice) {
-        visibleCharacters = 0
         expanded = true
+        revealElapsed.snapTo(0f)
         val text = advice ?: return@LaunchedEffect
-        while (visibleCharacters < text.length) {
-            characterAlpha.snapTo(0f)
-            visibleCharacters++
-            characterAlpha.animateTo(1f, tween(34))
+        val total = (text.length - 1).coerceAtLeast(0) * AI_REVEAL_STAGGER_MS + AI_REVEAL_FADE_MS
+        revealElapsed.animateTo(total, tween(total.toInt().coerceAtLeast(1), easing = LinearEasing))
+    }
+    val elapsed = revealElapsed.value
+    val visibleCharacters = advice?.let { text ->
+        if (text.isEmpty()) 0 else ((elapsed / AI_REVEAL_STAGGER_MS).toInt() + 1).coerceIn(0, text.length)
+    } ?: 0
+    val trailingAlphas = remember(elapsed, visibleCharacters) {
+        List(minOf(AI_REVEAL_FADE_CHARS, visibleCharacters)) { back ->
+            val startedAt = (visibleCharacters - 1 - back) * AI_REVEAL_STAGGER_MS
+            ((elapsed - startedAt) / AI_REVEAL_FADE_MS).coerceIn(0f, 1f)
         }
     }
     SectionCard("AI 天气建议") {
         when {
-            advice != null && expanded -> MarkdownText(advice.take(visibleCharacters), characterAlpha.value)
+            advice != null && expanded -> MarkdownText(advice.take(visibleCharacters), trailingAlphas)
             advice != null -> Text("建议内容已折叠", color = Color.White.copy(alpha = .65f), fontSize = 12.sp)
             configured -> Text("基于当前天气、逐小时预报、空气质量和预警生成个性化建议。", color = Color.White.copy(alpha = .75f), fontSize = 12.sp)
             else -> Text("请先在设置中配置 Anthropic 兼容 API。", color = Color.White.copy(alpha = .75f), fontSize = 12.sp)
@@ -1388,7 +1400,7 @@ private fun AiAdviceCard(
 }
 
 @Composable
-internal fun MarkdownText(markdown: String, trailingAlpha: Float = 1f) {
+internal fun MarkdownText(markdown: String, trailingAlphas: List<Float> = emptyList()) {
     Column(Modifier.fillMaxWidth()) {
         val lines = markdown.lines()
         var inCodeBlock = false
@@ -1396,7 +1408,7 @@ internal fun MarkdownText(markdown: String, trailingAlpha: Float = 1f) {
         while (index < lines.size) {
         val rawLine = lines[index]
         val trimmed = rawLine.trim()
-        val fade = if (index == lines.lastIndex) trailingAlpha else 1f
+        val fade = if (index == lines.lastIndex) trailingAlphas else emptyList()
         if (trimmed.startsWith("```") || trimmed.startsWith("~~~")) {
             inCodeBlock = !inCodeBlock
             index++
@@ -1472,15 +1484,18 @@ private fun isMarkdownTableDivider(line: String): Boolean =
     line.contains('|') && line.trim('|', ' ').split('|').all { it.trim().matches(Regex(":?-{3,}:?")) }
 
 @Composable
-private fun MarkdownTableRow(line: String, trailingAlpha: Float) {
+private fun MarkdownTableRow(line: String, trailingAlphas: List<Float>) {
     Row(Modifier.fillMaxWidth().padding(vertical = 3.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-        line.trim('|').split('|').forEach { cell ->
-            Text(inlineMarkdown(cell.trim(), trailingAlpha), color = Color.White.copy(alpha = .88f), fontSize = 12.sp, modifier = Modifier.weight(1f))
+        val cells = line.trim('|').split('|')
+        cells.forEachIndexed { cellIndex, cell ->
+            // 只有最后一格可能处在逐字浮现的尾部，其余格子保持不透明
+            val cellAlphas = if (cellIndex == cells.lastIndex) trailingAlphas else emptyList()
+            Text(inlineMarkdown(cell.trim(), cellAlphas), color = Color.White.copy(alpha = .88f), fontSize = 12.sp, modifier = Modifier.weight(1f))
         }
     }
 }
 
-internal fun inlineMarkdown(source: String, trailingAlpha: Float = 1f) = buildAnnotatedString {
+internal fun inlineMarkdown(source: String, trailingAlphas: List<Float> = emptyList()) = buildAnnotatedString {
     var index = 0
     while (index < source.length) {
         when {
@@ -1540,13 +1555,18 @@ internal fun inlineMarkdown(source: String, trailingAlpha: Float = 1f) = buildAn
             else -> { append(source[index]); index++ }
         }
     }
-    if (length > 0 && trailingAlpha < 1f) {
-        addStyle(
-            // 仅改变绘制透明度，不改变基线或字号，避免最后一行逐字出现时重新测量而抖动。
-            SpanStyle(color = Color.White.copy(alpha = trailingAlpha)),
-            length - 1,
-            length,
-        )
+    // trailingAlphas[0] 对应最后一个字符，[1] 对应倒数第二个……每个字符各自套透明度，
+    // 因此相邻字符可以同时处在不同的淡入进度上。仅改绘制 alpha，不动字号与基线，避免重排抖动。
+    val fadeCount = minOf(trailingAlphas.size, length)
+    for (offset in 0 until fadeCount) {
+        val alpha = trailingAlphas[offset]
+        if (alpha < 1f) {
+            addStyle(
+                SpanStyle(color = Color.White.copy(alpha = alpha)),
+                length - 1 - offset,
+                length - offset,
+            )
+        }
     }
 }
 
