@@ -173,17 +173,5 @@ class ConfigStore(context: Context) {
         rawRequestJson = get("aiRawRequestJson", DEFAULT_AI_REQUEST_JSON),
     )
 
-    fun saveAiSettings(settings: AiSettings) {
-        preferences.edit()
-            .putString("aiEndpoint", settings.endpoint)
-            .putString("aiApiKey", settings.apiKey)
-            .putString("aiModel", settings.model)
-            .putInt("aiMaxTokens", settings.maxTokens.coerceIn(64, 8192))
-            .putInt("aiMaxOutputCharacters", settings.maxOutputCharacters.coerceIn(100, 10000))
-            .putString("aiContext", settings.context)
-            .putString("aiRawRequestJson", settings.rawRequestJson)
-            .apply()
-    }
-
     private fun get(key: String, default: String): String = preferences.getString(key, default) ?: default
 }

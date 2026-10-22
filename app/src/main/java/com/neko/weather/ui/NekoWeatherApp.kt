@@ -58,6 +58,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -66,6 +67,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.automirrored.outlined.DirectionsRun
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Refresh
@@ -74,8 +76,10 @@ import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.automirrored.filled.RotateRight
 import androidx.compose.material.icons.outlined.AcUnit
 import androidx.compose.material.icons.outlined.Air
+import androidx.compose.material.icons.outlined.AutoAwesome
 import androidx.compose.material.icons.outlined.Checkroom
 import androidx.compose.material.icons.outlined.Cloud
+import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Grain
 import androidx.compose.material.icons.outlined.LightMode
 import androidx.compose.material.icons.outlined.LocationCity
@@ -93,12 +97,15 @@ import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Notifications
 import androidx.compose.material.icons.outlined.Palette
 import androidx.compose.material.icons.outlined.Person
+import androidx.compose.material.icons.outlined.QueryStats
+import androidx.compose.material.icons.outlined.SettingsBackupRestore
 import androidx.compose.material3.Button
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
@@ -176,7 +183,8 @@ import com.neko.weather.model.DEFAULT_OPEN_METEO_QUERY
 import com.neko.weather.model.DailyForecast
 import com.neko.weather.model.HOT_CITIES
 import com.neko.weather.model.HourlyForecast
-import com.neko.weather.model.DEFAULT_AI_REQUEST_JSON
+import com.neko.weather.model.AiModelProfile
+import com.neko.weather.model.AiProtocol
 import com.neko.weather.model.WeatherProviderProfile
 import com.neko.weather.model.AirProviderProfile
 import com.neko.weather.model.AlertProviderProfile
@@ -188,12 +196,14 @@ import com.neko.weather.model.TemperatureUnit
 import com.neko.weather.model.WindSpeedUnit
 import com.neko.weather.model.AppLanguage
 import com.neko.weather.data.ConfigStore
-import com.neko.weather.live2d.CubismRuntime
 import com.neko.weather.live2d.Live2dModel
 import com.neko.weather.data.ApiUsageTracker
 import com.neko.weather.data.ApiQuota
 import com.neko.weather.data.ApiUsageInterceptor
 import com.neko.weather.data.BackupCategories
+import com.neko.weather.ui.settings.ActionEmphasis
+import com.neko.weather.ui.settings.ChoiceOption
+import com.neko.weather.ui.settings.SettingsPanel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
@@ -219,6 +229,31 @@ private val Divider = Color.White.copy(alpha = 0.20f)
 private val LocalTemperatureUnit = staticCompositionLocalOf { TemperatureUnit.CELSIUS }
 private val LocalWindSpeedUnit = staticCompositionLocalOf { WindSpeedUnit.KILOMETRES_PER_HOUR }
 
+private object SettingsPageId {
+    const val ROOT = 1
+    const val PROVIDERS = 2
+    const val CITIES = 3
+    const val VOICE = 4
+    const val ABOUT = 5
+    const val APPEARANCE = 6
+    const val AI = 7
+    const val LIVE2D_EDITOR = 8
+    const val NOTIFICATIONS = 9
+    const val BACKUP = 10
+    const val API_USAGE = 11
+    const val DISPLAY_AND_REFRESH = 12
+    const val AI_EDITOR = 13
+    val CHILD_PAGES = setOf(PROVIDERS, VOICE, ABOUT, APPEARANCE, AI, AI_EDITOR, NOTIFICATIONS, BACKUP, API_USAGE, DISPLAY_AND_REFRESH)
+}
+
+private fun parentPageOf(page: Int): Int = when (page) {
+    SettingsPageId.LIVE2D_EDITOR -> SettingsPageId.APPEARANCE
+    SettingsPageId.AI_EDITOR -> SettingsPageId.AI
+    SettingsPageId.API_USAGE -> SettingsPageId.PROVIDERS
+    in SettingsPageId.CHILD_PAGES -> SettingsPageId.ROOT
+    else -> 0
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun NekoWeatherApp(viewModel: MainViewModel) {
@@ -227,6 +262,9 @@ fun NekoWeatherApp(viewModel: MainViewModel) {
     var page by rememberSaveable { mutableIntStateOf(0) }
     var providerMenuExpanded by remember { mutableStateOf(false) }
     var showQWeatherPreset by remember { mutableStateOf(false) }
+    var aiEditingId by remember { mutableStateOf<String?>(null) }
+    var aiSelectionMode by remember { mutableStateOf(false) }
+    var aiSelectedIds by remember { mutableStateOf(emptySet<String>()) }
     val settingsScrollState = rememberScrollState()
     var clockTick by remember { mutableLongStateOf(System.currentTimeMillis()) }
     val isNight = state.weather?.let { isNightTime(it, clockTick) } == true
@@ -238,11 +276,15 @@ fun NekoWeatherApp(viewModel: MainViewModel) {
     val showOnboarding = !onboardingDismissed && !configStore.isOnboardingCompleted()
 
     BackHandler(enabled = page != 0) {
-        page = when (page) {
-            8 -> 6
-            in listOf(2, 4, 5, 6, 7, 9, 10, 11, 12) -> 1
-            else -> 0
+        page = parentPageOf(page)
+    }
+
+    LaunchedEffect(page) {
+        if (page != SettingsPageId.AI) {
+            aiSelectionMode = false
+            aiSelectedIds = emptySet()
         }
+        if (page != SettingsPageId.AI_EDITOR) aiEditingId = null
     }
 
     DisposableEffect(lifecycleOwner) {
@@ -318,8 +360,8 @@ fun NekoWeatherApp(viewModel: MainViewModel) {
                     viewModel = viewModel,
                     isNight = isNight,
                     forceStaticLive2d = page != 0,
-                    openSettings = { page = 1 },
-                    openCitySettings = { page = 3 },
+                    openSettings = { page = SettingsPageId.ROOT },
+                    openCitySettings = { page = SettingsPageId.CITIES },
                 )
                 } else {
                     Scaffold(
@@ -328,37 +370,42 @@ fun NekoWeatherApp(viewModel: MainViewModel) {
                                 title = {
                                     Text(
                                         when (targetPage) {
-                                            1 -> "设置"
-                                            2 -> "内容供应商"
-                                            3 -> "选择城市"
-                                            4 -> "语音与音色"
-                                            5 -> "关于"
-                                            6 -> "外观与模型"
-                                            8 -> "Live2D 布局编辑"
-                                            9 -> "通知提醒"
-                                            10 -> "备份与还原"
-                                            11 -> "API 请求统计"
-                                            12 -> "显示与天气更新"
-                                            else -> "AI 建议"
+                                            SettingsPageId.ROOT -> "设置"
+                                            SettingsPageId.PROVIDERS -> "天气数据供应商"
+                                            SettingsPageId.CITIES -> "选择城市"
+                                            SettingsPageId.VOICE -> "语音与音色"
+                                            SettingsPageId.ABOUT -> "关于"
+                                            SettingsPageId.APPEARANCE -> "外观与主题"
+                                            SettingsPageId.LIVE2D_EDITOR -> "Live2D 布局编辑"
+                                            SettingsPageId.NOTIFICATIONS -> "通知提醒"
+                                            SettingsPageId.BACKUP -> "备份与还原"
+                                            SettingsPageId.API_USAGE -> "API 请求统计"
+                                            SettingsPageId.DISPLAY_AND_REFRESH -> "显示与更新"
+                                            SettingsPageId.AI_EDITOR -> "AI 模型"
+                                            else -> "AI 天气建议"
                                         },
                                     )
                                 },
                                 navigationIcon = {
                                     IconButton(onClick = {
-                                        page = when (targetPage) {
-                                            8 -> 6
-                                            in listOf(2, 4, 5, 6, 7, 9, 10, 11, 12) -> 1
-                                            else -> 0
-                                        }
+                                        page = parentPageOf(targetPage)
                                     }) {
                                         Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回天气")
                                     }
                                 },
                                 actions = {
-                                    if (targetPage == 2) {
+                                    if (targetPage == SettingsPageId.AI) {
+                                        IconButton(onClick = {
+                                            aiEditingId = null
+                                            page = SettingsPageId.AI_EDITOR
+                                        }) {
+                                            Icon(Icons.Default.Add, "添加模型")
+                                        }
+                                    }
+                                    if (targetPage == SettingsPageId.PROVIDERS) {
                                         Box {
                                             IconButton(onClick = { providerMenuExpanded = true }) {
-                                                Icon(Icons.Default.MoreVert, "更多内容供应商设置")
+                                                Icon(Icons.Default.MoreVert, "更多供应商设置")
                                             }
                                             DropdownMenu(
                                                 expanded = providerMenuExpanded,
@@ -379,31 +426,53 @@ fun NekoWeatherApp(viewModel: MainViewModel) {
                         },
                     ) { padding ->
                         when (targetPage) {
-                            1 -> SettingsPage(
-                                state = state,
-                                viewModel = viewModel,
-                                openApi = { page = 2 },
-                                openVoice = { page = 4 },
-                                openAbout = { page = 5 },
-                                openAppearance = { page = 6 },
-                                openAi = { page = 7 },
-                                openNotifications = { page = 9 },
-                                openBackup = { page = 10 },
-                                openDisplayAndRefresh = { page = 12 },
+                            SettingsPageId.ROOT -> SettingsPage(
+                                onOpenPage = { page = it },
                                 scrollState = settingsScrollState,
                                 modifier = Modifier.padding(padding),
                             )
-                            2 -> ApiConfigPage(state, viewModel, openStats = { page = 11 }, modifier = Modifier.padding(padding))
-                            3 -> CityPage(state, viewModel, onClose = { page = 0 }, modifier = Modifier.padding(padding))
-                            4 -> VoicePage(state, viewModel, Modifier.padding(padding))
-                            5 -> AboutPage(state, viewModel, Modifier.padding(padding))
-                            6 -> AppearancePage(state, viewModel, onOpenEditor = { page = 8 }, modifier = Modifier.padding(padding))
-                            8 -> Live2dLayoutEditor(state, viewModel, Modifier.padding(padding))
-                            9 -> NotificationSettingsPage(state, viewModel, Modifier.padding(padding))
-                            10 -> BackupRestorePage(viewModel, Modifier.padding(padding))
-                            11 -> ApiUsagePage(Modifier.padding(padding))
-                            12 -> DisplayAndRefreshPage(state, viewModel, Modifier.padding(padding))
-                            else -> AiSettingsPage(state, viewModel, Modifier.padding(padding))
+                            SettingsPageId.PROVIDERS -> ApiConfigPage(state, viewModel, openStats = { page = SettingsPageId.API_USAGE }, modifier = Modifier.padding(padding))
+                            SettingsPageId.CITIES -> CityPage(state, viewModel, onClose = { page = 0 }, modifier = Modifier.padding(padding))
+                            SettingsPageId.VOICE -> VoicePage(state, viewModel, Modifier.padding(padding))
+                            SettingsPageId.ABOUT -> AboutPage(state, viewModel, Modifier.padding(padding))
+                            SettingsPageId.APPEARANCE -> AppearancePage(state, viewModel, onOpenEditor = { page = SettingsPageId.LIVE2D_EDITOR }, modifier = Modifier.padding(padding))
+                            SettingsPageId.LIVE2D_EDITOR -> Live2dLayoutEditor(state, viewModel, Modifier.padding(padding))
+                            SettingsPageId.NOTIFICATIONS -> NotificationSettingsPage(state, viewModel, Modifier.padding(padding))
+                            SettingsPageId.BACKUP -> BackupRestorePage(viewModel, Modifier.padding(padding))
+                            SettingsPageId.API_USAGE -> ApiUsagePage(Modifier.padding(padding))
+                            SettingsPageId.DISPLAY_AND_REFRESH -> DisplayAndRefreshPage(state, viewModel, Modifier.padding(padding))
+                            SettingsPageId.AI -> AiProfilesPage(
+                                state = state,
+                                viewModel = viewModel,
+                                selectionMode = aiSelectionMode,
+                                selectedIds = aiSelectedIds,
+                                onToggleSelection = { id ->
+                                    aiSelectedIds = if (id in aiSelectedIds) aiSelectedIds - id else aiSelectedIds + id
+                                },
+                                onStartSelection = { id ->
+                                    aiSelectionMode = true
+                                    aiSelectedIds = setOf(id)
+                                },
+                                onExitSelection = {
+                                    aiSelectionMode = false
+                                    aiSelectedIds = emptySet()
+                                },
+                                onEdit = { id ->
+                                    aiEditingId = id
+                                    page = SettingsPageId.AI_EDITOR
+                                },
+                                modifier = Modifier.padding(padding),
+                            )
+                            SettingsPageId.AI_EDITOR -> AiProfileEditorPage(
+                                state = state,
+                                viewModel = viewModel,
+                                editingId = aiEditingId,
+                                onDone = {
+                                    page = SettingsPageId.AI
+                                    aiEditingId = null
+                                },
+                                modifier = Modifier.padding(padding),
+                            )
                         }
                     }
                 }
@@ -529,7 +598,7 @@ private fun WeatherPage(
                         onNextCity = { viewModel.switchHomeCity(1) },
                         aiAdvice = state.aiAdvice,
                         aiLoading = state.aiLoading,
-                        aiConfigured = state.aiSettings.apiKey.isNotBlank(),
+                        aiConfigured = state.aiProfiles.selected?.apiKey?.isNotBlank() == true,
                         onRequestAiAdvice = viewModel::requestAiAdvice,
                         onClearAiAdvice = viewModel::clearAiAdvice,
                         onToggleLive2d = { viewModel.setLive2dHidden(!state.customization.live2dHidden) },
@@ -1267,6 +1336,10 @@ private fun Advice(icon: ImageVector, title: String, text: String) {
     }
 }
 
+private const val AI_REVEAL_STAGGER_MS = 34f
+private const val AI_REVEAL_FADE_CHARS = 4
+private const val AI_REVEAL_FADE_MS = AI_REVEAL_STAGGER_MS * AI_REVEAL_FADE_CHARS
+
 @Composable
 private fun AiAdviceCard(
     advice: String?,
@@ -1275,22 +1348,30 @@ private fun AiAdviceCard(
     onRequest: () -> Unit,
     onClear: () -> Unit,
 ) {
-    var visibleCharacters by remember(advice) { mutableIntStateOf(0) }
     var expanded by rememberSaveable { mutableStateOf(true) }
-    val characterAlpha = remember(advice) { Animatable(1f) }
+    // 所有字符的透明度都由这一个「已流逝毫秒」时钟推导：每字错峰 AI_REVEAL_STAGGER_MS 启动、
+    // 各自用 AI_REVEAL_FADE_MS 淡入，于是任一时刻约有 AI_REVEAL_FADE_CHARS 个字同时在渐变。
+    val revealElapsed = remember(advice) { Animatable(0f) }
     LaunchedEffect(advice) {
-        visibleCharacters = 0
         expanded = true
+        revealElapsed.snapTo(0f)
         val text = advice ?: return@LaunchedEffect
-        while (visibleCharacters < text.length) {
-            characterAlpha.snapTo(0f)
-            visibleCharacters++
-            characterAlpha.animateTo(1f, tween(34))
+        val total = (text.length - 1).coerceAtLeast(0) * AI_REVEAL_STAGGER_MS + AI_REVEAL_FADE_MS
+        revealElapsed.animateTo(total, tween(total.toInt().coerceAtLeast(1), easing = LinearEasing))
+    }
+    val elapsed = revealElapsed.value
+    val visibleCharacters = advice?.let { text ->
+        if (text.isEmpty()) 0 else ((elapsed / AI_REVEAL_STAGGER_MS).toInt() + 1).coerceIn(0, text.length)
+    } ?: 0
+    val trailingAlphas = remember(elapsed, visibleCharacters) {
+        List(minOf(AI_REVEAL_FADE_CHARS, visibleCharacters)) { back ->
+            val startedAt = (visibleCharacters - 1 - back) * AI_REVEAL_STAGGER_MS
+            ((elapsed - startedAt) / AI_REVEAL_FADE_MS).coerceIn(0f, 1f)
         }
     }
     SectionCard("AI 天气建议") {
         when {
-            advice != null && expanded -> MarkdownText(advice.take(visibleCharacters), characterAlpha.value)
+            advice != null && expanded -> MarkdownText(advice.take(visibleCharacters), trailingAlphas)
             advice != null -> Text("建议内容已折叠", color = Color.White.copy(alpha = .65f), fontSize = 12.sp)
             configured -> Text("基于当前天气、逐小时预报、空气质量和预警生成个性化建议。", color = Color.White.copy(alpha = .75f), fontSize = 12.sp)
             else -> Text("请先在设置中配置 Anthropic 兼容 API。", color = Color.White.copy(alpha = .75f), fontSize = 12.sp)
@@ -1319,7 +1400,7 @@ private fun AiAdviceCard(
 }
 
 @Composable
-internal fun MarkdownText(markdown: String, trailingAlpha: Float = 1f) {
+internal fun MarkdownText(markdown: String, trailingAlphas: List<Float> = emptyList()) {
     Column(Modifier.fillMaxWidth()) {
         val lines = markdown.lines()
         var inCodeBlock = false
@@ -1327,7 +1408,7 @@ internal fun MarkdownText(markdown: String, trailingAlpha: Float = 1f) {
         while (index < lines.size) {
         val rawLine = lines[index]
         val trimmed = rawLine.trim()
-        val fade = if (index == lines.lastIndex) trailingAlpha else 1f
+        val fade = if (index == lines.lastIndex) trailingAlphas else emptyList()
         if (trimmed.startsWith("```") || trimmed.startsWith("~~~")) {
             inCodeBlock = !inCodeBlock
             index++
@@ -1403,15 +1484,18 @@ private fun isMarkdownTableDivider(line: String): Boolean =
     line.contains('|') && line.trim('|', ' ').split('|').all { it.trim().matches(Regex(":?-{3,}:?")) }
 
 @Composable
-private fun MarkdownTableRow(line: String, trailingAlpha: Float) {
+private fun MarkdownTableRow(line: String, trailingAlphas: List<Float>) {
     Row(Modifier.fillMaxWidth().padding(vertical = 3.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-        line.trim('|').split('|').forEach { cell ->
-            Text(inlineMarkdown(cell.trim(), trailingAlpha), color = Color.White.copy(alpha = .88f), fontSize = 12.sp, modifier = Modifier.weight(1f))
+        val cells = line.trim('|').split('|')
+        cells.forEachIndexed { cellIndex, cell ->
+            // 只有最后一格可能处在逐字浮现的尾部，其余格子保持不透明
+            val cellAlphas = if (cellIndex == cells.lastIndex) trailingAlphas else emptyList()
+            Text(inlineMarkdown(cell.trim(), cellAlphas), color = Color.White.copy(alpha = .88f), fontSize = 12.sp, modifier = Modifier.weight(1f))
         }
     }
 }
 
-internal fun inlineMarkdown(source: String, trailingAlpha: Float = 1f) = buildAnnotatedString {
+internal fun inlineMarkdown(source: String, trailingAlphas: List<Float> = emptyList()) = buildAnnotatedString {
     var index = 0
     while (index < source.length) {
         when {
@@ -1471,13 +1555,18 @@ internal fun inlineMarkdown(source: String, trailingAlpha: Float = 1f) = buildAn
             else -> { append(source[index]); index++ }
         }
     }
-    if (length > 0 && trailingAlpha < 1f) {
-        addStyle(
-            // 仅改变绘制透明度，不改变基线或字号，避免最后一行逐字出现时重新测量而抖动。
-            SpanStyle(color = Color.White.copy(alpha = trailingAlpha)),
-            length - 1,
-            length,
-        )
+    // trailingAlphas[0] 对应最后一个字符，[1] 对应倒数第二个……每个字符各自套透明度，
+    // 因此相邻字符可以同时处在不同的淡入进度上。仅改绘制 alpha，不动字号与基线，避免重排抖动。
+    val fadeCount = minOf(trailingAlphas.size, length)
+    for (offset in 0 until fadeCount) {
+        val alpha = trailingAlphas[offset]
+        if (alpha < 1f) {
+            addStyle(
+                SpanStyle(color = Color.White.copy(alpha = alpha)),
+                length - 1 - offset,
+                length - offset,
+            )
+        }
     }
 }
 
@@ -2106,55 +2195,27 @@ private fun CityResultRow(city: CityLocation, selected: Boolean, onClick: () -> 
 
 @Composable
 private fun SettingsPage(
-    state: MainUiState,
-    viewModel: MainViewModel,
-    openApi: () -> Unit,
-    openVoice: () -> Unit,
-    openAbout: () -> Unit,
-    openAppearance: () -> Unit,
-    openAi: () -> Unit,
-    openNotifications: () -> Unit,
-    openBackup: () -> Unit,
-    openDisplayAndRefresh: () -> Unit,
-    scrollState: androidx.compose.foundation.ScrollState,
+    onOpenPage: (Int) -> Unit,
+    scrollState: ScrollState,
     modifier: Modifier = Modifier,
 ) {
-    Column(
-        modifier = modifier.fillMaxSize().verticalScroll(scrollState).padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp),
-    ) {
-        SettingsCard(
-            icon = Icons.Outlined.Cloud,
-            title = "内容供应商",
-            subtitle = if (state.config.endpoint.contains("open-meteo.com")) {
-                "Open-Meteo · ${if (state.config.airQualityStandard == "EU") "AQI（欧标）" else "AQI（美标）"}"
-            } else {
-                "自定义 API · ${state.config.displayName}"
-            },
-            onClick = openApi,
-        )
-        SettingsCard(
-            icon = Icons.Default.GraphicEq,
-            title = "TTS 与音色",
-            subtitle = "系统 TTS · 已导入 ${state.importedModels.size} 个离线模型",
-            onClick = openVoice,
-        )
-        SettingsCard(
-            icon = Icons.Outlined.Palette,
-            title = "外观、皮肤与 Live2D",
-            subtitle = "字体、Logo、背景及模型导入",
-            onClick = openAppearance,
-        )
-        SettingsCard(
-            icon = Icons.Outlined.LightMode,
-            title = "AI 建议",
-            subtitle = if (state.aiSettings.apiKey.isBlank()) "Anthropic 兼容 API · 尚未配置" else state.aiSettings.model,
-            onClick = openAi,
-        )
-        SettingsCard(Icons.Outlined.Notifications, "通知提醒", "每日天气、周报、降雨和灾害预警", openNotifications)
-        SettingsCard(Icons.Outlined.Info, "备份与还原", "选择配置类别并导出 ZIP 备份", openBackup)
-        SettingsCard(Icons.Default.Refresh, "显示与天气更新", "温度、风速单位与自动更新", openDisplayAndRefresh)
-        SettingsCard(Icons.Outlined.Info, "关于", "版本信息、开源仓库与检查更新", openAbout)
+    SettingsPanel(modifier, scrollState) {
+        Group("应用与界面") {
+            Entry(icon = Icons.Outlined.Palette, title = "外观与主题", showChevron = true, onClick = { onOpenPage(SettingsPageId.APPEARANCE) })
+            Entry(icon = Icons.Outlined.LightMode, title = "显示与更新", showChevron = true, onClick = { onOpenPage(SettingsPageId.DISPLAY_AND_REFRESH) })
+            Entry(icon = Icons.Default.GraphicEq, title = "语音与音色", showChevron = true, onClick = { onOpenPage(SettingsPageId.VOICE) })
+        }
+        Group("数据与网络") {
+            Entry(icon = Icons.Outlined.Cloud, title = "天气数据供应商", showChevron = true, onClick = { onOpenPage(SettingsPageId.PROVIDERS) })
+            Entry(icon = Icons.Outlined.AutoAwesome, title = "AI 天气建议", showChevron = true, onClick = { onOpenPage(SettingsPageId.AI) })
+        }
+        Group("提醒") {
+            Entry(icon = Icons.Outlined.Notifications, title = "通知提醒", showChevron = true, onClick = { onOpenPage(SettingsPageId.NOTIFICATIONS) })
+        }
+        Group("其他") {
+            Entry(icon = Icons.Outlined.SettingsBackupRestore, title = "备份与还原", showChevron = true, onClick = { onOpenPage(SettingsPageId.BACKUP) })
+            Entry(icon = Icons.Outlined.Info, title = "关于", showChevron = true, onClick = { onOpenPage(SettingsPageId.ABOUT) })
+        }
     }
 }
 
@@ -2162,76 +2223,61 @@ private fun SettingsPage(
 private fun DisplayAndRefreshPage(state: MainUiState, viewModel: MainViewModel, modifier: Modifier = Modifier) {
     var refreshInterval by remember(state.refreshSettings.intervalMinutes) { mutableIntStateOf(state.refreshSettings.intervalMinutes) }
     var freshnessMinutes by remember(state.refreshSettings.freshnessMinutes) { mutableIntStateOf(state.refreshSettings.freshnessMinutes) }
-    Column(
-        modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp),
-    ) {
-        Text("温度单位", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            TemperatureUnit.entries.forEach { unit ->
-                val selected = state.displaySettings.temperatureUnit == unit
-                OutlinedButton(
-                    onClick = { viewModel.updateDisplaySettings(state.displaySettings.copy(temperatureUnit = unit)) },
-                    modifier = Modifier.weight(1f),
-                    colors = ButtonDefaults.outlinedButtonColors(containerColor = if (selected) MaterialTheme.colorScheme.primaryContainer else Color.Transparent),
-                ) { Text(when (unit) { TemperatureUnit.CELSIUS -> "摄氏"; TemperatureUnit.FAHRENHEIT -> "华氏"; TemperatureUnit.KELVIN -> "开尔文" }, fontSize = 12.sp) }
-            }
+    SettingsPanel(modifier) {
+        Group("单位", "影响首页温度与风速的显示格式") {
+            ChoiceRow(
+                label = "温度单位",
+                options = listOf(
+                    ChoiceOption(TemperatureUnit.CELSIUS.name, "摄氏"),
+                    ChoiceOption(TemperatureUnit.FAHRENHEIT.name, "华氏"),
+                    ChoiceOption(TemperatureUnit.KELVIN.name, "开尔文"),
+                ),
+                selected = state.displaySettings.temperatureUnit.name,
+                onSelect = { key -> viewModel.updateDisplaySettings(state.displaySettings.copy(temperatureUnit = TemperatureUnit.valueOf(key))) },
+                columns = 3,
+            )
+            ChoiceRow(
+                label = "风速单位",
+                options = listOf(
+                    ChoiceOption(WindSpeedUnit.KILOMETRES_PER_HOUR.name, "km/h"),
+                    ChoiceOption(WindSpeedUnit.METRES_PER_SECOND.name, "m/s"),
+                ),
+                selected = state.displaySettings.windSpeedUnit.name,
+                onSelect = { key -> viewModel.updateDisplaySettings(state.displaySettings.copy(windSpeedUnit = WindSpeedUnit.valueOf(key))) },
+                columns = 2,
+            )
         }
-        Text("风速单位", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            WindSpeedUnit.entries.forEach { unit ->
-                val selected = state.displaySettings.windSpeedUnit == unit
-                OutlinedButton(
-                    onClick = { viewModel.updateDisplaySettings(state.displaySettings.copy(windSpeedUnit = unit)) },
-                    modifier = Modifier.weight(1f),
-                    colors = ButtonDefaults.outlinedButtonColors(containerColor = if (selected) MaterialTheme.colorScheme.primaryContainer else Color.Transparent),
-                ) { Text(if (unit == WindSpeedUnit.METRES_PER_SECOND) "m/s" else "km/h") }
+        Group("天气更新") {
+            SwitchRow(
+                title = "自动更新天气",
+                checked = state.refreshSettings.enabled,
+                onCheckedChange = { viewModel.updateWeatherRefreshSettings(state.refreshSettings.copy(enabled = it)) },
+            )
+            if (state.refreshSettings.enabled) {
+                SliderRow(
+                    title = "更新间隔",
+                    valueText = "$refreshInterval 分钟",
+                    value = refreshInterval.toFloat(),
+                    onValueChange = { refreshInterval = ((it / 5f).roundToInt() * 5).coerceIn(5, 120) },
+                    valueRange = 5f..120f,
+                    steps = 22,
+                    onValueChangeFinished = { viewModel.updateWeatherRefreshSettings(state.refreshSettings.copy(intervalMinutes = refreshInterval)) },
+                )
             }
-        }
-        Text("天气更新", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
-        Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f))) {
-            Column(Modifier.fillMaxWidth().padding(16.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Default.Refresh, null, tint = MaterialTheme.colorScheme.primary)
-                    Spacer(Modifier.width(12.dp))
-                    Text("自动更新天气", Modifier.weight(1f), fontWeight = FontWeight.Medium)
-                    Switch(
-                        checked = state.refreshSettings.enabled,
-                        onCheckedChange = { viewModel.updateWeatherRefreshSettings(state.refreshSettings.copy(enabled = it)) },
-                    )
-                }
-                AnimatedVisibility(state.refreshSettings.enabled) {
-                    Column {
-                        Spacer(Modifier.height(8.dp))
-                        Text("每 $refreshInterval 分钟更新", fontSize = 13.sp)
-                        Slider(
-                            value = refreshInterval.toFloat(),
-                            onValueChange = { refreshInterval = ((it / 5f).roundToInt() * 5).coerceIn(5, 120) },
-                            onValueChangeFinished = { viewModel.updateWeatherRefreshSettings(state.refreshSettings.copy(intervalMinutes = refreshInterval)) },
-                            valueRange = 5f..120f,
-                            steps = 22,
-                        )
-                    }
-                }
-                HorizontalDivider(Modifier.padding(vertical = 8.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("近期数据不重复更新", Modifier.weight(1f), fontWeight = FontWeight.Medium)
-                    Switch(
-                        checked = state.refreshSettings.freshnessGuardEnabled,
-                        onCheckedChange = { viewModel.updateWeatherRefreshSettings(state.refreshSettings.copy(freshnessGuardEnabled = it)) },
-                    )
-                }
-                AnimatedVisibility(state.refreshSettings.freshnessGuardEnabled) {
-                    Column {
-                        Text("有效期 $freshnessMinutes 分钟", fontSize = 13.sp)
-                        Slider(
-                            value = freshnessMinutes.toFloat(),
-                            onValueChange = { freshnessMinutes = it.roundToInt().coerceIn(1, 120) },
-                            onValueChangeFinished = { viewModel.updateWeatherRefreshSettings(state.refreshSettings.copy(freshnessMinutes = freshnessMinutes)) },
-                            valueRange = 1f..120f,
-                        )
-                    }
-                }
+            SwitchRow(
+                title = "近期数据不重复更新",
+                checked = state.refreshSettings.freshnessGuardEnabled,
+                onCheckedChange = { viewModel.updateWeatherRefreshSettings(state.refreshSettings.copy(freshnessGuardEnabled = it)) },
+            )
+            if (state.refreshSettings.freshnessGuardEnabled) {
+                SliderRow(
+                    title = "数据有效期",
+                    valueText = "$freshnessMinutes 分钟",
+                    value = freshnessMinutes.toFloat(),
+                    onValueChange = { freshnessMinutes = it.roundToInt().coerceIn(1, 120) },
+                    valueRange = 1f..120f,
+                    onValueChangeFinished = { viewModel.updateWeatherRefreshSettings(state.refreshSettings.copy(freshnessMinutes = freshnessMinutes)) },
+                )
             }
         }
     }
@@ -2248,18 +2294,29 @@ private fun BackupRestorePage(viewModel: MainViewModel, modifier: Modifier = Mod
         BackupCategories.API_USAGE to "API 请求统计与配额",
         BackupCategories.NOTIFICATION_HISTORY to "通知发送历史",
     )
-    Column(modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Text("API Key 和 AI Key 可能包含在“设置”备份中，请妥善保存备份文件。", color = MaterialTheme.colorScheme.error, fontSize = 12.sp)
-        options.forEach { (key, label) ->
-            Card(Modifier.fillMaxWidth()) {
-                Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Text(label, Modifier.weight(1f))
-                    Switch(key in categories, { enabled -> categories = if (enabled) categories + key else categories - key })
-                }
+    SettingsPanel(modifier) {
+        Group("备份内容") {
+            NoteRow("API Key 和 AI Key 可能包含在“设置”备份中，请妥善保存备份文件。", isError = true)
+            options.forEach { (key, label) ->
+                SwitchRow(
+                    title = label,
+                    checked = key in categories,
+                    onCheckedChange = { enabled -> categories = if (enabled) categories + key else categories - key },
+                )
             }
         }
-        Button(onClick = { create.launch("NekoWeather-backup-${LocalDate.now()}.zip") }, enabled = categories.isNotEmpty(), modifier = Modifier.fillMaxWidth()) { Text("导出所选内容") }
-        OutlinedButton(onClick = { open.launch(arrayOf("application/zip", "application/octet-stream")) }, modifier = Modifier.fillMaxWidth()) { Text("选择备份文件并还原") }
+        Group("操作") {
+            ActionRow(
+                label = "导出所选内容",
+                onClick = { create.launch("NekoWeather-backup-${LocalDate.now()}.zip") },
+                enabled = categories.isNotEmpty(),
+                emphasis = ActionEmphasis.PRIMARY,
+            )
+            ActionRow(
+                label = "选择备份文件并还原",
+                onClick = { open.launch(arrayOf("application/zip", "application/octet-stream")) },
+            )
+        }
     }
 }
 
@@ -2272,54 +2329,36 @@ private fun NotificationSettingsPage(state: MainUiState, viewModel: MainViewMode
             permission.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
     }
-    Column(modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        NotificationSwitch("每日早间天气", state.notificationSettings.morningEnabled) {
-            viewModel.updateNotificationSettings(state.notificationSettings.copy(morningEnabled = it)); requestPermissionIfNeeded(it)
-        }
-        NotificationSwitch("周日下周速览", state.notificationSettings.weeklyEnabled) {
-            viewModel.updateNotificationSettings(state.notificationSettings.copy(weeklyEnabled = it)); requestPermissionIfNeeded(it)
-        }
-        NotificationSwitch("降雨提醒", state.notificationSettings.rainEnabled) {
-            viewModel.updateNotificationSettings(state.notificationSettings.copy(rainEnabled = it)); requestPermissionIfNeeded(it)
-        }
-        NotificationSwitch("气象灾害预警", state.notificationSettings.alertEnabled) {
-            viewModel.updateNotificationSettings(state.notificationSettings.copy(alertEnabled = it)); requestPermissionIfNeeded(it)
-        }
-    }
-}
-
-@Composable
-private fun NotificationSwitch(title: String, checked: Boolean, onChecked: (Boolean) -> Unit) {
-    Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f))) {
-        Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-            Icon(Icons.Outlined.Notifications, null, tint = MaterialTheme.colorScheme.primary)
-            Spacer(Modifier.width(12.dp))
-            Text(title, Modifier.weight(1f), fontWeight = FontWeight.Medium)
-            Switch(checked, onChecked)
-        }
-    }
-}
-
-@Composable
-private fun SettingsCard(icon: ImageVector, title: String, subtitle: String, onClick: () -> Unit) {
-    Card(
-        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
-        shape = RoundedCornerShape(18.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f)),
-    ) {
-        Row(Modifier.fillMaxWidth().padding(18.dp), verticalAlignment = Alignment.CenterVertically) {
-            Box(
-                Modifier.size(44.dp).background(MaterialTheme.colorScheme.primaryContainer, RoundedCornerShape(13.dp)),
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(icon, null, tint = MaterialTheme.colorScheme.primary)
-            }
-            Spacer(Modifier.width(14.dp))
-            Column(Modifier.weight(1f)) {
-                Text(title, fontWeight = FontWeight.Bold, fontSize = 17.sp)
-                Text(subtitle, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
-            }
-            Icon(Icons.AutoMirrored.Filled.ArrowForward, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+    SettingsPanel(modifier) {
+        Group("通知类型", "开启时会请求系统通知权限") {
+            SwitchRow(
+                title = "每日早间天气",
+                checked = state.notificationSettings.morningEnabled,
+                onCheckedChange = {
+                    viewModel.updateNotificationSettings(state.notificationSettings.copy(morningEnabled = it)); requestPermissionIfNeeded(it)
+                },
+            )
+            SwitchRow(
+                title = "周日下周速览",
+                checked = state.notificationSettings.weeklyEnabled,
+                onCheckedChange = {
+                    viewModel.updateNotificationSettings(state.notificationSettings.copy(weeklyEnabled = it)); requestPermissionIfNeeded(it)
+                },
+            )
+            SwitchRow(
+                title = "降雨提醒",
+                checked = state.notificationSettings.rainEnabled,
+                onCheckedChange = {
+                    viewModel.updateNotificationSettings(state.notificationSettings.copy(rainEnabled = it)); requestPermissionIfNeeded(it)
+                },
+            )
+            SwitchRow(
+                title = "气象灾害预警",
+                checked = state.notificationSettings.alertEnabled,
+                onCheckedChange = {
+                    viewModel.updateNotificationSettings(state.notificationSettings.copy(alertEnabled = it)); requestPermissionIfNeeded(it)
+                },
+            )
         }
     }
 }
@@ -2332,40 +2371,56 @@ private fun AboutPage(state: MainUiState, viewModel: MainViewModel, modifier: Mo
     val version = remember {
         context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "0.1.0"
     }
-    Column(
-        modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(14.dp),
-    ) {
-        Icon(Icons.Outlined.WbSunny, null, tint = NekoBlue, modifier = Modifier.size(72.dp))
-        Text("NekoWeather", fontSize = 26.sp, fontWeight = FontWeight.Bold)
-        Text("猫猫风雨", fontSize = 18.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Text("版本 $version", color = MaterialTheme.colorScheme.onSurfaceVariant)
-        HorizontalDivider()
-        Button(onClick = viewModel::checkUpdate, enabled = !state.checkingUpdate, modifier = Modifier.fillMaxWidth()) {
-            if (state.checkingUpdate) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
-            else Text("检查更新")
+    SettingsPanel(modifier) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(bottom = 4.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Icon(Icons.Outlined.WbSunny, null, tint = NekoBlue, modifier = Modifier.size(72.dp))
+            Text("NekoWeather", fontSize = 26.sp, fontWeight = FontWeight.Bold)
+            Text("猫猫风雨", fontSize = 18.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text("版本 $version", color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
-        OutlinedButton(
-            onClick = { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/FatPanda8885/NekoWeather"))) },
-            modifier = Modifier.fillMaxWidth(),
-        ) { Text("查看开源仓库") }
-        OutlinedButton(
-            onClick = { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://nekoweather.12am.moe"))) },
-            modifier = Modifier.fillMaxWidth(),
-        ) { Text("应用官网") }
-        HorizontalDivider()
-        listOf(
-            "用户使用协议" to "terms_of_use.md",
-            "隐私政策" to "privacy_policy.md",
-            "第三方内容使用说明" to "third_party_notice.md",
-            "GNU GPLv3 开源协议" to "gpl_v3.txt",
-        ).forEach { document ->
-            OutlinedButton(onClick = {
-                documentLanguage = if (document.second.endsWith(".md")) state.displaySettings.language else AppLanguage.ENGLISH
-                openDocument = document
-            }, modifier = Modifier.fillMaxWidth()) {
-                Text(document.first)
+        Group("关于应用") {
+            if (state.checkingUpdate) {
+                Entry(
+                    title = "检查更新",
+                    trailing = { CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp) },
+                )
+            } else {
+                ActionRow(
+                    label = "检查更新",
+                    onClick = viewModel::checkUpdate,
+                    emphasis = ActionEmphasis.PRIMARY,
+                )
+            }
+            Entry(
+                title = "查看开源仓库",
+                showChevron = true,
+                onClick = { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/FatPanda8885/NekoWeather"))) },
+            )
+            Entry(
+                title = "应用官网",
+                showChevron = true,
+                onClick = { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://nekoweather.12am.moe"))) },
+            )
+        }
+        Group("法律与许可") {
+            listOf(
+                "用户使用协议" to "terms_of_use.md",
+                "隐私政策" to "privacy_policy.md",
+                "第三方内容使用说明" to "third_party_notice.md",
+                "GNU GPLv3 开源协议" to "gpl_v3.txt",
+            ).forEach { document ->
+                Entry(
+                    title = document.first,
+                    showChevron = true,
+                    onClick = {
+                        documentLanguage = if (document.second.endsWith(".md")) state.displaySettings.language else AppLanguage.ENGLISH
+                        openDocument = document
+                    },
+                )
             }
         }
     }
@@ -2411,7 +2466,8 @@ private fun AboutPage(state: MainUiState, viewModel: MainViewModel, modifier: Mo
             text = {
                 Box(
                     Modifier.fillMaxWidth().height(520.dp).clip(RoundedCornerShape(14.dp))
-                        .background(Color(0xFF20252D)).verticalScroll(documentScroll).padding(14.dp),
+                        .background(MaterialTheme.colorScheme.surfaceVariant)
+                        .verticalScroll(documentScroll).padding(14.dp),
                 ) {
                     CompositionLocalProvider(LocalAppLanguage provides AppLanguage.SIMPLIFIED_CHINESE) {
                         MarkdownText(document)
@@ -2576,120 +2632,160 @@ private fun AppearancePage(
     val weatherBackgroundPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         uri?.let { pendingImageEdit = PendingImageEdit(it, pendingWeatherBackground, "裁切天气背景") }
     }
-    Column(modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-        Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = .55f))) {
-            Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text("语言", Modifier.weight(1f), fontWeight = FontWeight.SemiBold)
-                Box {
-                    OutlinedButton(onClick = { languageMenuExpanded = true }) {
-                        Text(when (state.displaySettings.language) {
-                            AppLanguage.SIMPLIFIED_CHINESE -> "简体中文"
-                            AppLanguage.TRADITIONAL_CHINESE -> "繁體中文"
-                            AppLanguage.ENGLISH -> "English"
-                            AppLanguage.JAPANESE -> "日本語"
-                        })
-                    }
-                    DropdownMenu(languageMenuExpanded, { languageMenuExpanded = false }) {
-                        listOf(
-                            AppLanguage.SIMPLIFIED_CHINESE to "简体中文",
-                            AppLanguage.TRADITIONAL_CHINESE to "繁體中文",
-                            AppLanguage.ENGLISH to "English",
-                            AppLanguage.JAPANESE to "日本語",
-                        ).forEach { (language, label) ->
-                            DropdownMenuItem(
-                                text = { Text(label) },
-                                onClick = {
-                                    viewModel.updateDisplaySettings(state.displaySettings.copy(language = language))
-                                    languageMenuExpanded = false
-                                },
-                            )
-                        }
-                    }
-                }
-            }
-        }
-        Text("皮肤资源", fontWeight = FontWeight.Bold, fontSize = 19.sp)
-        Text("资源保存在应用私有目录，可分别替换字体、Logo 和主界面背景。视频背景会静音循环播放。", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
-        ImportOptionRow(if (state.customization.fontPath.isBlank()) "导入字体" else "更换字体（已导入）", state.customization.fontPath.isNotBlank(), { fontPicker.launch(arrayOf("font/ttf", "font/otf", "application/octet-stream")) }) { viewModel.resetCustomizationResource("font") }
-        ImportOptionRow(if (state.customization.logoPath.isBlank()) "导入主页 Logo" else "更换主页 Logo", state.customization.logoPath.isNotBlank(), { logoPicker.launch(arrayOf("image/*")) }) { viewModel.resetCustomizationResource("logo") }
-        ImportOptionRow(if (state.customization.appIconPath.isBlank()) "导入桌面应用图标" else "更换桌面应用图标", state.customization.appIconPath.isNotBlank(), { appIconPicker.launch(arrayOf("image/*")) }) { viewModel.resetCustomizationResource("appicon") }
-        if (state.customization.appIconPath.isNotBlank()) {
-            Button(viewModel::createDesktopShortcut, Modifier.fillMaxWidth()) { Text("添加自定义图标到桌面") }
-            Text("Android 不允许应用直接替换已安装入口图标；这里会创建指向本应用的自定义桌面快捷方式。", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-        ImportOptionRow("选择静态背景", state.customization.backgroundPath.isNotBlank() && !state.customization.backgroundIsVideo, { imagePicker.launch(arrayOf("image/*")) }) { viewModel.resetCustomizationResource("background") }
-        ImportOptionRow("选择视频动态背景", state.customization.backgroundPath.isNotBlank() && state.customization.backgroundIsVideo, { videoPicker.launch(arrayOf("video/mp4", "video/webm")) }) { viewModel.resetCustomizationResource("background") }
-        Text("按天气覆盖背景", fontWeight = FontWeight.SemiBold)
-        listOf("clear" to "晴天", "cloudy" to "多云/阴天", "rain" to "雨天", "snow" to "雪天", "fog" to "雾天", "thunder" to "雷暴").chunked(2).forEach { row ->
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                row.forEach { (key, label) ->
-                    Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
-                        OutlinedButton(onClick = {
-                            pendingWeatherBackground = "weather_$key"
-                            weatherBackgroundPicker.launch(arrayOf("image/*"))
-                        }, modifier = Modifier.weight(1f)) { Text(if (state.customization.weatherBackgrounds[key].isNullOrBlank()) label else "$label ✓", fontSize = 12.sp) }
-                        val hasCustomBackground = !state.customization.weatherBackgrounds[key].isNullOrBlank()
-                        IconButton(
-                            onClick = { viewModel.resetCustomizationResource("weather_$key") },
-                            enabled = hasCustomBackground,
-                        ) {
-                            Icon(Icons.Default.Refresh, "恢复默认")
-                        }
+    val languageLabel = when (state.displaySettings.language) {
+        AppLanguage.SIMPLIFIED_CHINESE -> "简体中文"
+        AppLanguage.TRADITIONAL_CHINESE -> "繁體中文"
+        AppLanguage.ENGLISH -> "English"
+        AppLanguage.JAPANESE -> "日本語"
+    }
+    SettingsPanel(modifier) {
+        Group("语言") {
+            Box {
+                Entry(
+                    title = "显示语言",
+                    trailingText = languageLabel,
+                    showChevron = true,
+                    onClick = { languageMenuExpanded = true },
+                )
+                DropdownMenu(languageMenuExpanded, { languageMenuExpanded = false }) {
+                    listOf(
+                        AppLanguage.SIMPLIFIED_CHINESE to "简体中文",
+                        AppLanguage.TRADITIONAL_CHINESE to "繁體中文",
+                        AppLanguage.ENGLISH to "English",
+                        AppLanguage.JAPANESE to "日本語",
+                    ).forEach { (language, label) ->
+                        DropdownMenuItem(
+                            text = { Text(label) },
+                            onClick = {
+                                viewModel.updateDisplaySettings(state.displaySettings.copy(language = language))
+                                languageMenuExpanded = false
+                            },
+                        )
                     }
                 }
             }
         }
-        HorizontalDivider()
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Text("Live2D", Modifier.weight(1f), fontWeight = FontWeight.Bold, fontSize = 19.sp)
-            Switch(
-                checked = state.customization.live2dEnabled,
-                onCheckedChange = viewModel::setLive2dEnabled,
+        Group(
+            title = "皮肤资源",
+            description = "资源保存在应用私有目录，可分别替换字体、Logo 和主界面背景。视频背景会静音循环播放。",
+        ) {
+            Entry(
+                title = if (state.customization.fontPath.isBlank()) "导入字体" else "更换字体",
+                trailingText = if (state.customization.fontPath.isNotBlank()) "已导入" else null,
+                trailing = {
+                    IconButton(onClick = { viewModel.resetCustomizationResource("font") }, enabled = state.customization.fontPath.isNotBlank()) {
+                        Icon(Icons.Default.Refresh, "恢复默认")
+                    }
+                },
+                onClick = { fontPicker.launch(arrayOf("font/ttf", "font/otf", "application/octet-stream")) },
+            )
+            Entry(
+                title = if (state.customization.logoPath.isBlank()) "导入主页 Logo" else "更换主页 Logo",
+                trailingText = if (state.customization.logoPath.isNotBlank()) "已导入" else null,
+                trailing = {
+                    IconButton(onClick = { viewModel.resetCustomizationResource("logo") }, enabled = state.customization.logoPath.isNotBlank()) {
+                        Icon(Icons.Default.Refresh, "恢复默认")
+                    }
+                },
+                onClick = { logoPicker.launch(arrayOf("image/*")) },
+            )
+            Entry(
+                title = if (state.customization.appIconPath.isBlank()) "导入桌面应用图标" else "更换桌面应用图标",
+                trailingText = if (state.customization.appIconPath.isNotBlank()) "已导入" else null,
+                trailing = {
+                    IconButton(onClick = { viewModel.resetCustomizationResource("appicon") }, enabled = state.customization.appIconPath.isNotBlank()) {
+                        Icon(Icons.Default.Refresh, "恢复默认")
+                    }
+                },
+                onClick = { appIconPicker.launch(arrayOf("image/*")) },
+            )
+            if (state.customization.appIconPath.isNotBlank()) {
+                ActionRow(label = "添加自定义图标到桌面", onClick = viewModel::createDesktopShortcut)
+            }
+            Entry(
+                title = if (state.customization.backgroundPath.isNotBlank() && !state.customization.backgroundIsVideo) "更换静态背景" else "选择静态背景",
+                trailingText = if (state.customization.backgroundPath.isNotBlank() && !state.customization.backgroundIsVideo) "已导入" else null,
+                trailing = {
+                    IconButton(onClick = { viewModel.resetCustomizationResource("background") }, enabled = state.customization.backgroundPath.isNotBlank() && !state.customization.backgroundIsVideo) {
+                        Icon(Icons.Default.Refresh, "恢复默认")
+                    }
+                },
+                onClick = { imagePicker.launch(arrayOf("image/*")) },
+            )
+            Entry(
+                title = if (state.customization.backgroundPath.isNotBlank() && state.customization.backgroundIsVideo) "更换视频动态背景" else "选择视频动态背景",
+                trailingText = if (state.customization.backgroundPath.isNotBlank() && state.customization.backgroundIsVideo) "已导入" else null,
+                trailing = {
+                    IconButton(onClick = { viewModel.resetCustomizationResource("background") }, enabled = state.customization.backgroundPath.isNotBlank() && state.customization.backgroundIsVideo) {
+                        Icon(Icons.Default.Refresh, "恢复默认")
+                    }
+                },
+                onClick = { videoPicker.launch(arrayOf("video/mp4", "video/webm")) },
             )
         }
-        Text("实验性功能，可能会造成卡顿", color = MaterialTheme.colorScheme.error, fontSize = 11.sp)
-        Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.65f))) {
-            Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text("Cubism 完整运行时已内置", fontWeight = FontWeight.SemiBold)
-                Text(CubismRuntime.displayName, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
-                Text(
-                    "支持动作、表情、物理、呼吸、眨眼、触摸视线与点击反馈。模型资源仍单独导入，不会打进安装包。",
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    fontSize = 12.sp,
+        Group("按天气覆盖背景") {
+            listOf("clear" to "晴天", "cloudy" to "多云/阴天", "rain" to "雨天", "snow" to "雪天", "fog" to "雾天", "thunder" to "雷暴").forEach { (key, label) ->
+                val hasCustomBackground = !state.customization.weatherBackgrounds[key].isNullOrBlank()
+                Entry(
+                    title = label,
+                    trailingText = if (hasCustomBackground) "已设置" else null,
+                    trailing = {
+                        IconButton(onClick = { viewModel.resetCustomizationResource("weather_$key") }, enabled = hasCustomBackground) {
+                            Icon(Icons.Default.Refresh, "恢复默认")
+                        }
+                    },
+                    onClick = {
+                        pendingWeatherBackground = "weather_$key"
+                        weatherBackgroundPicker.launch(arrayOf("image/*"))
+                    },
                 )
             }
         }
-        Text("可导入多个 ZIP 模型包并随时切换。必须包含 .model3.json、.moc3 和纹理；preview.png 为可选列表封面。", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
-        OutlinedButton({ live2dPicker.launch(arrayOf("application/zip", "application/octet-stream")) }, Modifier.fillMaxWidth()) { Text("导入新模型") }
-        state.customization.live2dModels.forEach { model ->
-            val selected = model.id == state.customization.selectedLive2dId
-            Card(
-                modifier = Modifier.fillMaxWidth().clickable { viewModel.selectLive2d(model.id) },
-                colors = CardDefaults.cardColors(
-                    containerColor = if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant,
-                ),
-            ) {
-                Row(Modifier.fillMaxWidth().padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
-                    if (model.previewPath.isNotBlank()) CustomImage(model.previewPath, Modifier.size(52.dp, 66.dp))
-                    else Icon(Icons.Outlined.Person, null, Modifier.size(52.dp), tint = MaterialTheme.colorScheme.primary)
-                    Spacer(Modifier.width(12.dp))
-                    Column(Modifier.weight(1f)) {
-                        Text(model.name, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        Text(if (selected) "当前使用" else "点击切换", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                    IconButton(onClick = { viewModel.deleteLive2d(model.id) }) { Icon(Icons.Default.Delete, "删除模型") }
+        Group("Live2D") {
+            NoteRow("实验性功能，可能会造成卡顿", isError = true)
+            SwitchRow(
+                title = "启用 Live2D",
+                checked = state.customization.live2dEnabled,
+                onCheckedChange = viewModel::setLive2dEnabled,
+                hint = "支持动作、表情、物理、呼吸、眨眼、触摸视线与点击反馈。模型资源仍单独导入，不会打进安装包。",
+            )
+            ActionRow(
+                label = "导入新模型",
+                onClick = { live2dPicker.launch(arrayOf("application/zip", "application/octet-stream")) },
+                hint = "可导入多个 ZIP 模型包并随时切换。必须包含 .model3.json、.moc3 和纹理；preview.png 为可选列表封面。",
+            )
+            state.customization.live2dModels.forEach { model ->
+                SeparatorRow()
+                Live2dModelRow(
+                    name = model.name,
+                    previewPath = model.previewPath,
+                    selected = model.id == state.customization.selectedLive2dId,
+                    onSelect = { viewModel.selectLive2d(model.id) },
+                    onDelete = { viewModel.deleteLive2d(model.id) },
+                )
+            }
+            if (state.customization.live2dModelPath.isNotBlank()) {
+                Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                    Live2dModel(
+                        modelPath = state.customization.live2dModelPath,
+                        previewPath = state.customization.live2dPreviewPath,
+                        modifier = Modifier.size(190.dp, 230.dp),
+                    )
                 }
+                ActionRow(
+                    label = "可视化调整大小、位置与角度",
+                    onClick = onOpenEditor,
+                    emphasis = ActionEmphasis.PRIMARY,
+                )
             }
         }
-        if (state.customization.live2dModelPath.isNotBlank()) {
-            Live2dModel(
-                modelPath = state.customization.live2dModelPath,
-                previewPath = state.customization.live2dPreviewPath,
-                modifier = Modifier.align(Alignment.CenterHorizontally).size(190.dp, 230.dp),
+        Group("重置") {
+            ActionRow(
+                label = "恢复默认外观",
+                onClick = viewModel::resetCustomization,
+                emphasis = ActionEmphasis.TEXT,
             )
-            Button(onClick = onOpenEditor, modifier = Modifier.fillMaxWidth()) { Text("可视化调整大小、位置与角度") }
         }
-        TextButton(onClick = viewModel::resetCustomization, modifier = Modifier.fillMaxWidth()) { Text("恢复默认外观") }
     }
     pendingImageEdit?.let { pending ->
         ImageCropDialog(
@@ -2704,10 +2800,29 @@ private fun AppearancePage(
 }
 
 @Composable
-private fun ImportOptionRow(label: String, imported: Boolean, onImport: () -> Unit, onReset: () -> Unit) {
-    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        OutlinedButton(onClick = onImport, modifier = Modifier.weight(1f)) { Text(label) }
-        IconButton(onClick = onReset, enabled = imported) { Icon(Icons.Default.Refresh, "恢复默认") }
+private fun Live2dModelRow(
+    name: String,
+    previewPath: String,
+    selected: Boolean,
+    onSelect: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onSelect)
+            .background(if (selected) MaterialTheme.colorScheme.primaryContainer else Color.Transparent)
+            .padding(horizontal = 16.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (previewPath.isNotBlank()) CustomImage(previewPath, Modifier.size(52.dp, 66.dp))
+        else Icon(Icons.Outlined.Person, null, Modifier.size(52.dp), tint = MaterialTheme.colorScheme.primary)
+        Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f)) {
+            Text(name, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(if (selected) "当前使用" else "点击切换", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        IconButton(onClick = onDelete) { Icon(Icons.Default.Delete, "删除模型") }
     }
 }
 
@@ -2782,90 +2897,254 @@ private fun Live2dLayoutEditor(state: MainUiState, viewModel: MainViewModel, mod
 }
 
 @Composable
-private fun AiSettingsPage(state: MainUiState, viewModel: MainViewModel, modifier: Modifier = Modifier) {
-    var config by remember(state.aiSettings) { mutableStateOf(state.aiSettings) }
-    var maxTokensText by remember(state.aiSettings.maxTokens) { mutableStateOf(state.aiSettings.maxTokens.toString()) }
-    var maxCharactersText by remember(state.aiSettings.maxOutputCharacters) { mutableStateOf(state.aiSettings.maxOutputCharacters.toString()) }
-    val maxTokensValue = maxTokensText.toIntOrNull()
-    val maxCharactersValue = maxCharactersText.toIntOrNull()
-    val jsonError = remember(config.rawRequestJson) {
-        runCatching {
-            val preview = config.rawRequestJson
-                .replace("{{model_json}}", org.json.JSONObject.quote(config.model))
-                .replace("{{max_tokens}}", config.maxTokens.toString())
-                .replace("{{context_json}}", org.json.JSONObject.quote(config.context))
-                .replace("{{weather_json}}", org.json.JSONObject.quote("weather"))
-            org.json.JSONObject(preview)
-        }.exceptionOrNull()?.message
+private fun AiProfilesPage(
+    state: MainUiState,
+    viewModel: MainViewModel,
+    selectionMode: Boolean,
+    selectedIds: Set<String>,
+    onToggleSelection: (String) -> Unit,
+    onStartSelection: (String) -> Unit,
+    onExitSelection: () -> Unit,
+    onEdit: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val profiles = state.aiProfiles
+    var renameTargetId by remember { mutableStateOf<String?>(null) }
+    var renameText by remember { mutableStateOf("") }
+    var confirmingDelete by remember { mutableStateOf(false) }
+    SettingsPanel(modifier) {
+        if (selectionMode) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = "已选 ${selectedIds.size} 项",
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.weight(1f),
+                )
+                TextButton(
+                    onClick = {
+                        val target = selectedIds.singleOrNull()
+                        renameTargetId = target
+                        renameText = profiles.models.firstOrNull { it.id == target }?.name.orEmpty()
+                    },
+                    enabled = selectedIds.size == 1,
+                ) {
+                    Text("重命名")
+                }
+                TextButton(onClick = { confirmingDelete = true }, enabled = selectedIds.isNotEmpty()) {
+                    Text("删除")
+                }
+                TextButton(onClick = onExitSelection) {
+                    Text("取消")
+                }
+            }
+        }
+        Group("模型") {
+            if (profiles.models.isEmpty()) NoteRow("尚未添加模型，点击右上角 + 添加。")
+            profiles.models.forEach { profile ->
+                Entry(
+                    title = profile.name,
+                    description = "${profile.protocol.label} · ${profile.model}",
+                    trailingText = if (profile.id == profiles.selected?.id) "当前使用" else null,
+                    trailing = {
+                        if (selectionMode) {
+                            Checkbox(checked = profile.id in selectedIds, onCheckedChange = { onToggleSelection(profile.id) })
+                        } else {
+                            IconButton(onClick = { onEdit(profile.id) }) {
+                                Icon(Icons.Outlined.Edit, "编辑")
+                            }
+                        }
+                    },
+                    onClick = { if (selectionMode) onToggleSelection(profile.id) else viewModel.selectAiProfile(profile.id) },
+                    onLongClick = { onStartSelection(profile.id) },
+                )
+            }
+        }
     }
-    Column(
-        modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        Text("Anthropic Messages 兼容配置", fontWeight = FontWeight.Bold, fontSize = 19.sp)
-        Text("请求会同时发送 x-api-key、Authorization Bearer 和 anthropic-version 请求头，以兼容官方 API 与常见网关。", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        ConfigField("API 地址（HTTPS）", config.endpoint) { config = config.copy(endpoint = it) }
-        OutlinedButton(
-            onClick = {
-                config = config.copy(
-                    endpoint = "https://api.deepseek.com/anthropic/v1/messages",
-                    model = "deepseek-v4-flash",
-                    rawRequestJson = DEFAULT_AI_REQUEST_JSON,
+    renameTargetId?.let { id ->
+        AlertDialog(
+            onDismissRequest = { renameTargetId = null },
+            title = { Text("重命名模型") },
+            text = {
+                OutlinedTextField(
+                    value = renameText,
+                    onValueChange = { renameText = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    label = { Text("名称") },
                 )
             },
-            modifier = Modifier.fillMaxWidth(),
-        ) { Text("使用 DeepSeek（Anthropic 兼容）") }
-        Text("填入 DeepSeek 基础地址时也会自动补全 /anthropic/v1/messages。", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        OutlinedTextField(
-            value = config.apiKey,
-            onValueChange = { config = config.copy(apiKey = it) },
-            label = { Text("API Key") },
-            visualTransformation = PasswordVisualTransformation(),
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
+            confirmButton = {
+                TextButton(onClick = {
+                    viewModel.renameAiProfile(id, renameText)
+                    renameTargetId = null
+                }) { Text("确定") }
+            },
+            dismissButton = { TextButton(onClick = { renameTargetId = null }) { Text("取消") } },
         )
-        ConfigField("模型", config.model) { config = config.copy(model = it) }
-        ConfigField("每次最大 Token（64～8192）", maxTokensText) {
-            maxTokensText = it.filter(Char::isDigit)
-            maxTokensText.toIntOrNull()?.let { value -> config = config.copy(maxTokens = value) }
+    }
+    if (confirmingDelete) {
+        AlertDialog(
+            onDismissRequest = { confirmingDelete = false },
+            title = { Text("删除模型") },
+            text = { Text("确定删除所选模型？该操作不可撤销。") },
+            confirmButton = {
+                TextButton(onClick = {
+                    viewModel.deleteAiProfiles(selectedIds)
+                    confirmingDelete = false
+                    onExitSelection()
+                }) { Text("删除") }
+            },
+            dismissButton = { TextButton(onClick = { confirmingDelete = false }) { Text("取消") } },
+        )
+    }
+}
+
+@Composable
+private fun AiProfileEditorPage(
+    state: MainUiState,
+    viewModel: MainViewModel,
+    editingId: String?,
+    onDone: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val initial = remember(editingId, state.aiProfiles) {
+        state.aiProfiles.models.firstOrNull { it.id == editingId } ?: AiModelProfile(id = "", name = "")
+    }
+    var draft by remember(initial) { mutableStateOf(initial) }
+    var maxTokensText by remember(initial) { mutableStateOf(initial.maxTokens.toString()) }
+    var maxCharactersText by remember(initial) { mutableStateOf(initial.maxOutputCharacters.toString()) }
+    var confirmingDelete by remember { mutableStateOf(false) }
+    val maxTokensValue = maxTokensText.toIntOrNull()
+    val maxCharactersValue = maxCharactersText.toIntOrNull()
+    val jsonError = remember(draft.rawRequestJson, draft.model, draft.maxTokens, draft.context) {
+        runCatching {
+            val preview = draft.rawRequestJson
+                .replace("{{model_json}}", JSONObject.quote(draft.model))
+                .replace("{{max_tokens}}", draft.maxTokens.toString())
+                .replace("{{context_json}}", JSONObject.quote(draft.context))
+                .replace("{{weather_json}}", JSONObject.quote("weather"))
+            JSONObject(preview)
+        }.exceptionOrNull()?.message
+    }
+    val valid = draft.name.isNotBlank() &&
+        draft.model.isNotBlank() &&
+        (draft.endpoint.isBlank() || draft.endpoint.startsWith("https://")) &&
+        maxTokensValue != null && maxTokensValue in 64..8192 &&
+        maxCharactersValue != null && maxCharactersValue in 100..10000 &&
+        jsonError == null
+    SettingsPanel(modifier) {
+        Group("基本信息") {
+            ChoiceRow(
+                label = "协议",
+                options = listOf(
+                    ChoiceOption(AiProtocol.ANTHROPIC_MESSAGES.name, AiProtocol.ANTHROPIC_MESSAGES.label),
+                    ChoiceOption(AiProtocol.OPENAI_CHAT.name, AiProtocol.OPENAI_CHAT.label),
+                ),
+                selected = draft.protocol.name,
+                onSelect = { key ->
+                    val next = AiProtocol.fromName(key)
+                    val previous = draft.protocol
+                    draft = draft.copy(
+                        protocol = next,
+                        endpoint = if (draft.endpoint.isBlank() || draft.endpoint == previous.defaultEndpoint) next.defaultEndpoint else draft.endpoint,
+                        rawRequestJson = if (draft.rawRequestJson.isBlank() || draft.rawRequestJson == previous.defaultRequestJson) next.defaultRequestJson else draft.rawRequestJson,
+                    )
+                },
+                columns = 2,
+            )
+            TextFieldRow(label = "名称", value = draft.name, onValueChange = { draft = draft.copy(name = it) })
+            TextFieldRow(
+                label = "API 地址",
+                value = draft.endpoint,
+                onValueChange = { draft = draft.copy(endpoint = it) },
+                supportingText = "留空将使用协议默认地址",
+            )
+            TextFieldRow(label = "API Key", value = draft.apiKey, onValueChange = { draft = draft.copy(apiKey = it) }, password = true)
+            TextFieldRow(label = "模型", value = draft.model, onValueChange = { draft = draft.copy(model = it) })
         }
-        if (maxTokensValue == null || maxTokensValue !in 64..8192) Text("请输入 64～8192", color = MaterialTheme.colorScheme.error, fontSize = 11.sp)
-        ConfigField("最长输出字数（100～10000）", maxCharactersText) {
-            maxCharactersText = it.filter(Char::isDigit)
-            maxCharactersText.toIntOrNull()?.let { value -> config = config.copy(maxOutputCharacters = value) }
+        Group("生成参数") {
+            TextFieldRow(
+                label = "每次最大 Token（64～8192）",
+                value = maxTokensText,
+                onValueChange = {
+                    maxTokensText = it.filter(Char::isDigit)
+                    maxTokensText.toIntOrNull()?.let { value -> draft = draft.copy(maxTokens = value) }
+                },
+            )
+            if (maxTokensValue == null || maxTokensValue !in 64..8192) NoteRow("请输入 64～8192", isError = true)
+            TextFieldRow(
+                label = "最长输出字数（100～10000）",
+                value = maxCharactersText,
+                onValueChange = {
+                    maxCharactersText = it.filter(Char::isDigit)
+                    maxCharactersText.toIntOrNull()?.let { value -> draft = draft.copy(maxOutputCharacters = value) }
+                },
+            )
+            if (maxCharactersValue == null || maxCharactersValue !in 100..10000) NoteRow("请输入 100～10000", isError = true)
+            TextFieldRow(
+                label = "上下文 / System Prompt",
+                value = draft.context,
+                onValueChange = { draft = draft.copy(context = it) },
+                singleLine = false,
+                minLines = 3,
+            )
         }
-        if (maxCharactersValue == null || maxCharactersValue !in 100..10000) Text("请输入 100～10000", color = MaterialTheme.colorScheme.error, fontSize = 11.sp)
-        OutlinedTextField(
-            value = config.context,
-            onValueChange = { config = config.copy(context = it) },
-            label = { Text("上下文 / System Prompt") },
-            minLines = 3,
-            maxLines = 8,
-            modifier = Modifier.fillMaxWidth(),
+        Group("请求体模板") {
+            TextFieldRow(
+                label = "请求体",
+                value = draft.rawRequestJson,
+                onValueChange = { draft = draft.copy(rawRequestJson = it) },
+                supportingText = jsonError?.let { "JSON 无效：$it" } ?: "发送前会替换占位符并再次校验",
+                isError = jsonError != null,
+                singleLine = false,
+                minLines = 10,
+                monospace = true,
+                hint = "可用占位符：{{model_json}}、{{max_tokens}}、{{context_json}}、{{weather_json}}",
+            )
+            ActionRow("恢复协议默认模板", { draft = draft.copy(rawRequestJson = draft.protocol.defaultRequestJson) })
+        }
+        Group("操作") {
+            ActionRow(
+                label = "保存",
+                onClick = {
+                    viewModel.saveAiProfile(
+                        draft.copy(
+                            name = draft.name.trim(),
+                            endpoint = draft.endpoint.trim().ifBlank { draft.protocol.defaultEndpoint },
+                            maxTokens = maxTokensValue ?: draft.maxTokens,
+                            maxOutputCharacters = maxCharactersValue ?: draft.maxOutputCharacters,
+                        ),
+                    )
+                    onDone()
+                },
+                enabled = valid,
+                emphasis = ActionEmphasis.PRIMARY,
+            )
+            if (editingId != null) {
+                ActionRow("删除该模型", { confirmingDelete = true }, emphasis = ActionEmphasis.TEXT)
+            }
+        }
+        NoteRow("API Key 未加密存储，请勿在截图或分享配置时泄露。", isError = true)
+    }
+    if (confirmingDelete) {
+        AlertDialog(
+            onDismissRequest = { confirmingDelete = false },
+            title = { Text("删除模型") },
+            text = { Text("确定删除「${draft.name}」？该操作不可撤销。") },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmingDelete = false
+                    viewModel.deleteAiProfiles(setOf(draft.id))
+                    onDone()
+                }) { Text("删除") }
+            },
+            dismissButton = { TextButton(onClick = { confirmingDelete = false }) { Text("取消") } },
         )
-        Text("原始请求 JSON", fontWeight = FontWeight.Bold)
-        Text("可用占位符：{{model_json}}、{{max_tokens}}、{{context_json}}、{{weather_json}}", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        OutlinedTextField(
-            value = config.rawRequestJson,
-            onValueChange = { config = config.copy(rawRequestJson = it) },
-            label = { Text("请求体") },
-            minLines = 10,
-            textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
-            isError = jsonError != null,
-            supportingText = { Text(jsonError?.let { "JSON 无效：$it" } ?: "发送前会替换占位符并再次校验") },
-            modifier = Modifier.fillMaxWidth(),
-        )
-        OutlinedButton(
-            onClick = { config = config.copy(rawRequestJson = DEFAULT_AI_REQUEST_JSON) },
-            modifier = Modifier.fillMaxWidth(),
-        ) { Text("恢复默认请求 JSON") }
-        Button(
-            onClick = { viewModel.saveAiSettings(config.copy(maxTokens = maxTokensValue!!, maxOutputCharacters = maxCharactersValue!!)) },
-            enabled = config.endpoint.startsWith("https://") && config.model.isNotBlank() && jsonError == null && maxTokensValue in 64..8192 && maxCharactersValue in 100..10000,
-            modifier = Modifier.fillMaxWidth(),
-        ) { Text("保存 AI 配置") }
-        Text("API Key 存储在应用私有 SharedPreferences 中，但尚未使用 Android Keystore 加密；请勿在截图或导出的配置中泄露。", color = MaterialTheme.colorScheme.error, fontSize = 11.sp)
-        Spacer(Modifier.height(16.dp))
     }
 }
 
@@ -2879,7 +3158,13 @@ private fun QWeatherPresetDialog(state: MainUiState, viewModel: MainViewModel, o
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text("一次配置 GeoAPI、天气、空气质量和气象预警。", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                ConfigField("API Host（可选）", host) { host = it }
+                OutlinedTextField(
+                    value = host,
+                    onValueChange = { host = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("API Host（可选）") },
+                    singleLine = true,
+                )
                 OutlinedTextField(
                     value = key,
                     onValueChange = { key = it },
@@ -2916,168 +3201,273 @@ private fun ApiConfigPage(state: MainUiState, viewModel: MainViewModel, openStat
     var editWeather by rememberSaveable { mutableStateOf(false) }
     var editAir by rememberSaveable { mutableStateOf(false) }
     var editAlert by rememberSaveable { mutableStateOf(false) }
-    Column(
-        modifier = modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        SettingsCard(Icons.Outlined.Info, "API 请求次数统计与限制", "按供应商分别统计日、周、月请求次数", openStats)
-        Text("降雨云图底图", fontWeight = FontWeight.Bold, fontSize = 18.sp)
-        Text("自动模式在中国大陆使用高德，其他地区使用 OpenStreetMap。也可以手动固定供应商。", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            listOf("AUTO" to "自动", "AMAP" to "高德", "BAIDU" to "百度", "OSM" to "OSM", "PETAL" to "花瓣")
-                .chunked(3).forEach { rowItems ->
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    rowItems.forEach { (value, label) ->
-                        OutlinedButton(
-                            onClick = { radarMapProvider = value },
-                            modifier = Modifier.weight(1f),
-                            colors = ButtonDefaults.outlinedButtonColors(
-                                containerColor = if (radarMapProvider == value) MaterialTheme.colorScheme.primaryContainer else Color.Transparent,
-                            ),
-                        ) { Text(label) }
-                    }
-                    repeat(3 - rowItems.size) { Spacer(Modifier.weight(1f)) }
+    SettingsPanel(modifier) {
+        Group("请求统计") {
+            Entry(
+                icon = Icons.Outlined.QueryStats,
+                title = "API 请求次数统计与限制",
+                description = "按供应商分别统计日、周、月请求次数",
+                showChevron = true,
+                onClick = openStats,
+                hint = "请求在发送前计数；达到任一已开启上限后，该供应商的新请求会被阻止。不同域名和内容类别分别统计。",
+            )
+        }
+        Group(
+            title = "降雨云图底图",
+            description = "自动模式在中国大陆使用高德，其他地区使用 OpenStreetMap。也可以手动固定供应商。",
+        ) {
+            ChoiceRow(
+                label = "底图供应商",
+                options = listOf(
+                    ChoiceOption("AUTO", "自动"),
+                    ChoiceOption("AMAP", "高德"),
+                    ChoiceOption("BAIDU", "百度"),
+                    ChoiceOption("OSM", "OSM"),
+                    ChoiceOption("PETAL", "花瓣"),
+                ),
+                selected = radarMapProvider,
+                onSelect = { radarMapProvider = it },
+                columns = 3,
+            )
+            if (radarMapProvider in setOf("AUTO", "AMAP")) {
+                TextFieldRow(
+                    label = "高德 Web 服务 API Key",
+                    value = amapWebKey,
+                    onValueChange = { amapWebKey = it },
+                    supportingText = "需要在高德控制台申请“Web 服务 API”类型 Key；为空时自动回退 OSM。",
+                    password = true,
+                )
+            }
+            if (radarMapProvider == "PETAL") {
+                TextFieldRow(
+                    label = "花瓣地图 Map Kit API Key",
+                    value = petalMapKey,
+                    onValueChange = { petalMapKey = it },
+                    supportingText = "需要在 AppGallery Connect 中启用 Map Kit；为空时自动回退 OSM。",
+                    password = true,
+                )
+            }
+            if (radarMapProvider == "BAIDU") {
+                TextFieldRow(
+                    label = "百度地图静态图 API AK",
+                    value = baiduMapAk,
+                    onValueChange = { baiduMapAk = it },
+                    supportingText = "支持服务端或 Android 类型 AK；Android AK 会自动附带当前签名 mcode。请在控制台启用静态图 API。为空时回退 OSM。",
+                    password = true,
+                )
+            }
+            ActionRow(
+                label = "保存云图底图设置",
+                onClick = { viewModel.updateRadarMapProvider(radarMapProvider, amapWebKey, petalMapKey, baiduMapAk) },
+                emphasis = ActionEmphasis.PRIMARY,
+            )
+        }
+        Group("天气供应商") {
+            SectionLabel("预设")
+            profiles.weather.filter { it.builtIn }.forEach { profile ->
+                Entry(
+                    title = profile.name,
+                    description = profile.endpoint,
+                    trailingText = if (profile.id == profiles.selectedWeatherId) "已选" else null,
+                    onClick = { viewModel.selectWeatherProvider(profile.id) },
+                )
+            }
+            SectionLabel("我的模板")
+            profiles.weather.filterNot { it.builtIn }.forEach { profile ->
+                Entry(
+                    title = profile.name,
+                    description = profile.endpoint,
+                    trailingText = if (profile.id == profiles.selectedWeatherId) "已选" else null,
+                    trailing = {
+                        IconButton(onClick = { viewModel.deleteProviderTemplate("weather", profile.id) }) {
+                            Icon(Icons.Default.Delete, "删除模板")
+                        }
+                    },
+                    onClick = {
+                        viewModel.selectWeatherProvider(profile.id); editWeather = true
+                    },
+                )
+            }
+            ActionRow(
+                label = "新增天气供应商模板",
+                onClick = {
+                    weatherEditor = WeatherProviderProfile("", "新天气模板", endpoint = "", extraQuery = "")
+                    editWeather = true
+                },
+            )
+            if (editWeather && !weatherEditor.builtIn) {
+                TextFieldRow(
+                    label = "模板名称",
+                    value = weatherEditor.name,
+                    onValueChange = { weatherEditor = weatherEditor.copy(name = it) },
+                )
+                TextFieldRow(
+                    label = "API 地址（HTTPS）",
+                    value = weatherEditor.endpoint,
+                    onValueChange = { weatherEditor = weatherEditor.copy(endpoint = it) },
+                )
+                TextFieldRow(
+                    label = "纬度参数",
+                    value = weatherEditor.latitudeParameter,
+                    onValueChange = { weatherEditor = weatherEditor.copy(latitudeParameter = it) },
+                )
+                TextFieldRow(
+                    label = "经度参数",
+                    value = weatherEditor.longitudeParameter,
+                    onValueChange = { weatherEditor = weatherEditor.copy(longitudeParameter = it) },
+                )
+                TextFieldRow(
+                    label = "额外查询参数",
+                    value = weatherEditor.extraQuery,
+                    onValueChange = { weatherEditor = weatherEditor.copy(extraQuery = it) },
+                )
+                TextFieldRow(
+                    label = "API Key 名称",
+                    value = weatherEditor.apiKeyName,
+                    onValueChange = { weatherEditor = weatherEditor.copy(apiKeyName = it) },
+                )
+                TextFieldRow(
+                    label = "API Key",
+                    value = weatherEditor.apiKey,
+                    onValueChange = { weatherEditor = weatherEditor.copy(apiKey = it) },
+                    password = true,
+                )
+                SwitchRow(
+                    title = "把 API Key 放入请求 Header",
+                    checked = weatherEditor.apiKeyInHeader,
+                    onCheckedChange = { weatherEditor = weatherEditor.copy(apiKeyInHeader = it) },
+                )
+                TextFieldRow(
+                    label = "温度 JSON 路径",
+                    value = weatherEditor.temperaturePath,
+                    onValueChange = { weatherEditor = weatherEditor.copy(temperaturePath = it) },
+                )
+                TextFieldRow(
+                    label = "天气状况 JSON 路径",
+                    value = weatherEditor.conditionPath,
+                    onValueChange = { weatherEditor = weatherEditor.copy(conditionPath = it) },
+                )
+                TextFieldRow(
+                    label = "湿度 JSON 路径",
+                    value = weatherEditor.humidityPath,
+                    onValueChange = { weatherEditor = weatherEditor.copy(humidityPath = it) },
+                )
+                TextFieldRow(
+                    label = "风速 JSON 路径",
+                    value = weatherEditor.windSpeedPath,
+                    onValueChange = { weatherEditor = weatherEditor.copy(windSpeedPath = it) },
+                )
+                ActionRow(
+                    label = if (weatherEditor.id.isBlank()) "保存并启用模板" else "保存模板修改",
+                    onClick = { viewModel.saveWeatherTemplate(weatherEditor) },
+                    enabled = weatherEditor.name.isNotBlank() && weatherEditor.endpoint.startsWith("https://") && weatherEditor.temperaturePath.isNotBlank(),
+                    emphasis = ActionEmphasis.PRIMARY,
+                )
+            }
+        }
+        Group("空气质量供应商") {
+            profiles.air.forEach { profile ->
+                Entry(
+                    title = profile.name,
+                    description = "${profile.endpoint} · ${profile.standard}",
+                    trailingText = if (profile.id == profiles.selectedAirId) "已选" else null,
+                    trailing = if (profile.builtIn) {
+                        null
+                    } else {
+                        {
+                            IconButton(onClick = { viewModel.deleteProviderTemplate("air", profile.id) }) {
+                                Icon(Icons.Default.Delete, "删除模板")
+                            }
+                        }
+                    },
+                    onClick = {
+                        viewModel.selectAirProvider(profile.id); editAir = !profile.builtIn
+                    },
+                )
+            }
+            ActionRow(
+                label = "新增空气质量供应商模板",
+                onClick = {
+                    airEditor = AirProviderProfile("", "新空气质量模板", endpoint = "")
+                    editAir = true
+                },
+            )
+            if (editAir && !airEditor.builtIn) {
+                TextFieldRow(
+                    label = "模板名称",
+                    value = airEditor.name,
+                    onValueChange = { airEditor = airEditor.copy(name = it) },
+                )
+                TextFieldRow(
+                    label = "API 地址（HTTPS）",
+                    value = airEditor.endpoint,
+                    onValueChange = { airEditor = airEditor.copy(endpoint = it) },
+                )
+                SwitchRow(
+                    title = if (airEditor.standard == "EU") "AQI 欧标" else "AQI 美标",
+                    checked = airEditor.standard == "EU",
+                    onCheckedChange = { airEditor = airEditor.copy(standard = if (it) "EU" else "US") },
+                )
+                ActionRow(
+                    label = if (airEditor.id.isBlank()) "保存并启用模板" else "保存模板修改",
+                    onClick = { viewModel.saveAirTemplate(airEditor) },
+                    enabled = airEditor.name.isNotBlank() && airEditor.endpoint.startsWith("https://"),
+                    emphasis = ActionEmphasis.PRIMARY,
+                )
+            }
+        }
+        Group("气象预警供应商") {
+            profiles.alerts.forEach { profile ->
+                val description = when (profile.mode) {
+                    "AUTO" -> "按地区自动选择 NWS / DWD"
+                    "QWEATHER" -> "和风天气全球气象预警"
+                    "OFF" -> "不请求气象预警数据"
+                    else -> profile.endpoint
                 }
+                Entry(
+                    title = profile.name,
+                    description = description,
+                    trailingText = if (profile.id == profiles.selectedAlertId) "已选" else null,
+                    trailing = if (profile.builtIn) {
+                        null
+                    } else {
+                        {
+                            IconButton(onClick = { viewModel.deleteProviderTemplate("alert", profile.id) }) {
+                                Icon(Icons.Default.Delete, "删除模板")
+                            }
+                        }
+                    },
+                    onClick = {
+                        viewModel.selectAlertProvider(profile.id); editAlert = !profile.builtIn
+                    },
+                )
             }
-        }
-        AnimatedVisibility(radarMapProvider in setOf("AUTO", "AMAP"), enter = expandVertically(tween(240)) + fadeIn(), exit = shrinkVertically(tween(180)) + fadeOut()) {
-            OutlinedTextField(
-                value = amapWebKey,
-                onValueChange = { amapWebKey = it },
-                label = { Text("高德 Web 服务 API Key") },
-                supportingText = { Text("需要在高德控制台申请“Web 服务 API”类型 Key；为空时自动回退 OSM。") },
-                visualTransformation = PasswordVisualTransformation(),
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth(),
+            ActionRow(
+                label = "新增预警供应商模板",
+                onClick = {
+                    alertEditor = AlertProviderProfile("", "新预警模板", mode = "CUSTOM", endpoint = "")
+                    editAlert = true
+                },
             )
-        }
-        AnimatedVisibility(radarMapProvider == "PETAL", enter = expandVertically(tween(240)) + fadeIn(), exit = shrinkVertically(tween(180)) + fadeOut()) {
-            OutlinedTextField(
-                value = petalMapKey,
-                onValueChange = { petalMapKey = it },
-                label = { Text("花瓣地图 Map Kit API Key") },
-                supportingText = { Text("需要在 AppGallery Connect 中启用 Map Kit；为空时自动回退 OSM。") },
-                visualTransformation = PasswordVisualTransformation(),
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth(),
-            )
-        }
-        AnimatedVisibility(radarMapProvider == "BAIDU", enter = expandVertically(tween(240)) + fadeIn(), exit = shrinkVertically(tween(180)) + fadeOut()) {
-            OutlinedTextField(
-                value = baiduMapAk,
-                onValueChange = { baiduMapAk = it },
-                label = { Text("百度地图静态图 API AK") },
-                supportingText = { Text("支持服务端或 Android 类型 AK；Android AK 会自动附带当前签名 mcode。请在控制台启用静态图 API。为空时回退 OSM。") },
-                visualTransformation = PasswordVisualTransformation(),
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth(),
-            )
-        }
-        Button(
-            onClick = { viewModel.updateRadarMapProvider(radarMapProvider, amapWebKey, petalMapKey, baiduMapAk) },
-            modifier = Modifier.fillMaxWidth(),
-        ) { Text("保存云图底图设置") }
-        HorizontalDivider()
-        Text("天气供应商", fontWeight = FontWeight.Bold, fontSize = 18.sp)
-        Text("预设", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        profiles.weather.filter { it.builtIn }.forEach { profile ->
-            ProviderProfileCard(profile.name, profile.endpoint, profile.id == profiles.selectedWeatherId, true, { viewModel.selectWeatherProvider(profile.id) })
-        }
-        Text("我的模板", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        profiles.weather.filterNot { it.builtIn }.forEach { profile ->
-            ProviderProfileCard(profile.name, profile.endpoint, profile.id == profiles.selectedWeatherId, false, {
-                viewModel.selectWeatherProvider(profile.id); editWeather = true
-            }, { viewModel.deleteProviderTemplate("weather", profile.id) })
-        }
-        OutlinedButton(onClick = {
-            weatherEditor = WeatherProviderProfile("", "新天气模板", endpoint = "", extraQuery = "")
-            editWeather = true
-        }, modifier = Modifier.fillMaxWidth()) { Text("新增天气供应商模板") }
-        AnimatedVisibility(editWeather && !weatherEditor.builtIn, enter = expandVertically(tween(280)) + fadeIn(), exit = shrinkVertically(tween(220)) + fadeOut()) {
-          Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            ConfigField("模板名称", weatherEditor.name) { weatherEditor = weatherEditor.copy(name = it) }
-            ConfigField("API 地址（HTTPS）", weatherEditor.endpoint) { weatherEditor = weatherEditor.copy(endpoint = it) }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                ConfigField("纬度参数", weatherEditor.latitudeParameter, Modifier.weight(1f)) { weatherEditor = weatherEditor.copy(latitudeParameter = it) }
-                ConfigField("经度参数", weatherEditor.longitudeParameter, Modifier.weight(1f)) { weatherEditor = weatherEditor.copy(longitudeParameter = it) }
+            if (editAlert && !alertEditor.builtIn) {
+                TextFieldRow(
+                    label = "模板名称",
+                    value = alertEditor.name,
+                    onValueChange = { alertEditor = alertEditor.copy(name = it) },
+                )
+                TextFieldRow(
+                    label = "GeoJSON/CAP API 地址（HTTPS）",
+                    value = alertEditor.endpoint,
+                    onValueChange = { alertEditor = alertEditor.copy(endpoint = it) },
+                )
+                ActionRow(
+                    label = if (alertEditor.id.isBlank()) "保存并启用模板" else "保存模板修改",
+                    onClick = { viewModel.saveAlertTemplate(alertEditor) },
+                    enabled = alertEditor.name.isNotBlank() && alertEditor.endpoint.startsWith("https://"),
+                    emphasis = ActionEmphasis.PRIMARY,
+                )
             }
-            ConfigField("额外查询参数", weatherEditor.extraQuery) { weatherEditor = weatherEditor.copy(extraQuery = it) }
-            ConfigField("API Key 名称", weatherEditor.apiKeyName) { weatherEditor = weatherEditor.copy(apiKeyName = it) }
-            OutlinedTextField(
-                value = weatherEditor.apiKey,
-                onValueChange = { weatherEditor = weatherEditor.copy(apiKey = it) },
-                label = { Text("API Key") },
-                visualTransformation = PasswordVisualTransformation(),
-                singleLine = true, modifier = Modifier.fillMaxWidth(),
-            )
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("把 API Key 放入请求 Header", Modifier.weight(1f))
-                Switch(weatherEditor.apiKeyInHeader, { weatherEditor = weatherEditor.copy(apiKeyInHeader = it) })
-            }
-            ConfigField("温度 JSON 路径", weatherEditor.temperaturePath) { weatherEditor = weatherEditor.copy(temperaturePath = it) }
-            ConfigField("天气状况 JSON 路径", weatherEditor.conditionPath) { weatherEditor = weatherEditor.copy(conditionPath = it) }
-            ConfigField("湿度 JSON 路径", weatherEditor.humidityPath) { weatherEditor = weatherEditor.copy(humidityPath = it) }
-            ConfigField("风速 JSON 路径", weatherEditor.windSpeedPath) { weatherEditor = weatherEditor.copy(windSpeedPath = it) }
-            Button(
-                onClick = { viewModel.saveWeatherTemplate(weatherEditor) },
-                enabled = weatherEditor.name.isNotBlank() && weatherEditor.endpoint.startsWith("https://") && weatherEditor.temperaturePath.isNotBlank(),
-                modifier = Modifier.fillMaxWidth(),
-            ) { Text(if (weatherEditor.id.isBlank()) "保存并启用模板" else "保存模板修改") }
-          }
         }
-
-        HorizontalDivider()
-        Text("空气质量供应商", fontWeight = FontWeight.Bold, fontSize = 18.sp)
-        profiles.air.forEach { profile ->
-            ProviderProfileCard(profile.name, "${profile.endpoint} · ${profile.standard}", profile.id == profiles.selectedAirId, profile.builtIn, {
-                viewModel.selectAirProvider(profile.id); editAir = !profile.builtIn
-            }, if (profile.builtIn) null else ({ viewModel.deleteProviderTemplate("air", profile.id) }))
-        }
-        OutlinedButton(onClick = {
-            airEditor = AirProviderProfile("", "新空气质量模板", endpoint = "")
-            editAir = true
-        }, modifier = Modifier.fillMaxWidth()) { Text("新增空气质量供应商模板") }
-        AnimatedVisibility(editAir && !airEditor.builtIn, enter = expandVertically(tween(280)) + fadeIn(), exit = shrinkVertically(tween(220)) + fadeOut()) {
-          Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            ConfigField("模板名称", airEditor.name) { airEditor = airEditor.copy(name = it) }
-            ConfigField("API 地址（HTTPS）", airEditor.endpoint) { airEditor = airEditor.copy(endpoint = it) }
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(if (airEditor.standard == "EU") "AQI 欧标" else "AQI 美标", Modifier.weight(1f))
-                Switch(airEditor.standard == "EU", { airEditor = airEditor.copy(standard = if (it) "EU" else "US") })
-            }
-            Button(onClick = { viewModel.saveAirTemplate(airEditor) }, enabled = airEditor.name.isNotBlank() && airEditor.endpoint.startsWith("https://"), modifier = Modifier.fillMaxWidth()) {
-                Text(if (airEditor.id.isBlank()) "保存并启用模板" else "保存模板修改")
-            }
-          }
-        }
-
-        HorizontalDivider()
-        Text("气象预警供应商", fontWeight = FontWeight.Bold, fontSize = 18.sp)
-        profiles.alerts.forEach { profile ->
-            val description = when (profile.mode) {
-                "AUTO" -> "按地区自动选择 NWS / DWD"
-                "QWEATHER" -> "和风天气全球气象预警"
-                "OFF" -> "不请求气象预警数据"
-                else -> profile.endpoint
-            }
-            ProviderProfileCard(profile.name, description, profile.id == profiles.selectedAlertId, profile.builtIn, {
-                viewModel.selectAlertProvider(profile.id); editAlert = !profile.builtIn
-            }, if (profile.builtIn) null else ({ viewModel.deleteProviderTemplate("alert", profile.id) }))
-        }
-        OutlinedButton(onClick = {
-            alertEditor = AlertProviderProfile("", "新预警模板", mode = "CUSTOM", endpoint = "")
-            editAlert = true
-        }, modifier = Modifier.fillMaxWidth()) { Text("新增预警供应商模板") }
-        AnimatedVisibility(editAlert && !alertEditor.builtIn, enter = expandVertically(tween(280)) + fadeIn(), exit = shrinkVertically(tween(220)) + fadeOut()) {
-          Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            ConfigField("模板名称", alertEditor.name) { alertEditor = alertEditor.copy(name = it) }
-            ConfigField("GeoJSON/CAP API 地址（HTTPS）", alertEditor.endpoint) { alertEditor = alertEditor.copy(endpoint = it) }
-            Button(onClick = { viewModel.saveAlertTemplate(alertEditor) }, enabled = alertEditor.name.isNotBlank() && alertEditor.endpoint.startsWith("https://"), modifier = Modifier.fillMaxWidth()) {
-                Text(if (alertEditor.id.isBlank()) "保存并启用模板" else "保存模板修改")
-            }
-          }
-        }
-        Spacer(Modifier.height(12.dp))
     }
 }
 
@@ -3085,9 +3475,12 @@ private fun ApiConfigPage(state: MainUiState, viewModel: MainViewModel, openStat
 private fun ApiUsagePage(modifier: Modifier = Modifier) {
     var revision by remember { mutableIntStateOf(0) }
     val summaries = remember(revision) { ApiUsageTracker.summaries() }
-    Column(modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Text("请求在发送前计数；达到任一已开启上限后，该供应商的新请求会被阻止。不同域名和内容类别分别统计。", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        if (summaries.isEmpty()) Text("尚无 API 请求记录，刷新一次天气后即可看到。")
+    SettingsPanel(modifier) {
+        if (summaries.isEmpty()) {
+            Group("记录") {
+                NoteRow("尚无 API 请求记录，刷新一次天气后即可看到。")
+            }
+        }
         summaries.forEach { summary ->
             var dailyEnabled by remember(summary.key, revision) { mutableStateOf(summary.quota.dailyEnabled) }
             var weeklyEnabled by remember(summary.key, revision) { mutableStateOf(summary.quota.weeklyEnabled) }
@@ -3095,16 +3488,24 @@ private fun ApiUsagePage(modifier: Modifier = Modifier) {
             var daily by remember(summary.key, revision) { mutableStateOf(summary.quota.daily.toString()) }
             var weekly by remember(summary.key, revision) { mutableStateOf(summary.quota.weekly.toString()) }
             var monthly by remember(summary.key, revision) { mutableStateOf(summary.quota.monthly.toString()) }
-            Card(Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(summary.provider, fontWeight = FontWeight.Bold)
-                    Text(summary.url, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                    Text(summary.category, fontSize = 12.sp, color = MaterialTheme.colorScheme.primary)
-                    Text("今日 ${summary.daily} · 本周 ${summary.weekly} · 本月 ${summary.monthly}")
-                    QuotaInput("每日限制", dailyEnabled, { dailyEnabled = it }, daily) { daily = it }
-                    QuotaInput("每周限制", weeklyEnabled, { weeklyEnabled = it }, weekly) { weekly = it }
-                    QuotaInput("每月限制", monthlyEnabled, { monthlyEnabled = it }, monthly) { monthly = it }
-                    Button(onClick = {
+            Group(summary.provider) {
+                Entry(title = summary.category, description = summary.url)
+                NoteRow("今日 ${summary.daily} · 本周 ${summary.weekly} · 本月 ${summary.monthly}")
+                SwitchRow(title = "每日限制", checked = dailyEnabled, onCheckedChange = { dailyEnabled = it })
+                if (dailyEnabled) {
+                    TextFieldRow(label = "每日限制（次）", value = daily, onValueChange = { daily = it.filter(Char::isDigit) })
+                }
+                SwitchRow(title = "每周限制", checked = weeklyEnabled, onCheckedChange = { weeklyEnabled = it })
+                if (weeklyEnabled) {
+                    TextFieldRow(label = "每周限制（次）", value = weekly, onValueChange = { weekly = it.filter(Char::isDigit) })
+                }
+                SwitchRow(title = "每月限制", checked = monthlyEnabled, onCheckedChange = { monthlyEnabled = it })
+                if (monthlyEnabled) {
+                    TextFieldRow(label = "每月限制（次）", value = monthly, onValueChange = { monthly = it.filter(Char::isDigit) })
+                }
+                ActionRow(
+                    label = "保存限制",
+                    onClick = {
                         ApiUsageTracker.saveQuota(summary.key, ApiQuota(
                             dailyEnabled = dailyEnabled,
                             weeklyEnabled = weeklyEnabled,
@@ -3114,90 +3515,12 @@ private fun ApiUsagePage(modifier: Modifier = Modifier) {
                             monthly = monthly.toIntOrNull()?.coerceAtLeast(1) ?: 1,
                         ))
                         revision++
-                    }, Modifier.fillMaxWidth()) { Text("保存限制") }
-                }
+                    },
+                    emphasis = ActionEmphasis.PRIMARY,
+                )
             }
         }
     }
-}
-
-@Composable
-private fun QuotaInput(label: String, enabled: Boolean, onEnabled: (Boolean) -> Unit, value: String, onValue: (String) -> Unit) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Text(label, Modifier.weight(1f))
-        Switch(checked = enabled, onCheckedChange = onEnabled)
-    }
-    AnimatedVisibility(enabled) {
-        ConfigField("$label（次）", value) { onValue(it.filter(Char::isDigit)) }
-    }
-}
-
-@Composable
-private fun ProviderProfileCard(
-    title: String,
-    description: String,
-    selected: Boolean,
-    builtIn: Boolean,
-    onClick: () -> Unit,
-    onDelete: (() -> Unit)? = null,
-) {
-    Card(
-        Modifier.fillMaxWidth().clickable(onClick = onClick),
-        colors = CardDefaults.cardColors(containerColor = if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = .45f)),
-    ) {
-        Row(Modifier.fillMaxWidth().padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(title, fontWeight = FontWeight.Bold)
-                    Spacer(Modifier.width(6.dp))
-                    Text(if (builtIn) "预设" else "模板", fontSize = 10.sp, color = MaterialTheme.colorScheme.primary)
-                }
-                Text(description, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2)
-            }
-            if (selected) Text("✓", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
-            onDelete?.let { IconButton(it) { Icon(Icons.Default.Delete, "删除模板") } }
-        }
-    }
-}
-
-@Composable
-private fun ApiProviderCard(title: String, description: String, selected: Boolean, onClick: () -> Unit) {
-    Card(
-        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
-        ),
-    ) {
-        Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-            Icon(Icons.Outlined.Cloud, null, tint = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
-            Spacer(Modifier.width(12.dp))
-            Column(Modifier.weight(1f)) {
-                Text(title, fontWeight = FontWeight.Bold)
-                Text(description, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-            Box(
-                Modifier.size(20.dp).background(
-                    if (selected) MaterialTheme.colorScheme.primary else Color.Transparent,
-                    CircleShape,
-                ),
-                contentAlignment = Alignment.Center,
-            ) {
-                if (selected) Text("✓", color = MaterialTheme.colorScheme.onPrimary, fontSize = 13.sp)
-            }
-        }
-    }
-}
-
-@Composable
-private fun ConfigField(label: String, value: String, modifier: Modifier = Modifier, onValueChange: (String) -> Unit) {
-    OutlinedTextField(
-        value = value,
-        onValueChange = onValueChange,
-        modifier = modifier.fillMaxWidth(),
-        label = { Text(label) },
-        singleLine = true,
-    )
 }
 
 @Composable
@@ -3205,34 +3528,43 @@ private fun VoicePage(state: MainUiState, viewModel: MainViewModel, modifier: Mo
     val importer = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         uri?.let(viewModel::importVoiceModel)
     }
-    Column(
-        modifier = modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp),
-    ) {
-        Text("实验性功能，可能会造成卡顿", color = MaterialTheme.colorScheme.error, fontSize = 11.sp)
-        Text("系统 TTS 语速：${"%.1f".format(state.voiceSettings.rate)}")
-        Slider(state.voiceSettings.rate, { viewModel.updateVoiceSettings(state.voiceSettings.copy(rate = it)) }, valueRange = 0.5f..1.8f)
-        Text("系统 TTS 音调：${"%.1f".format(state.voiceSettings.pitch)}")
-        Slider(state.voiceSettings.pitch, { viewModel.updateVoiceSettings(state.voiceSettings.copy(pitch = it)) }, valueRange = 0.5f..1.8f)
-        HorizontalDivider()
-        Text("离线自定义音色", fontWeight = FontWeight.Bold)
-        Text("导入 VITS/Piper ONNX ZIP 模型包，根目录需包含 manifest.json、model.onnx、tokens.txt。")
-        OutlinedButton(onClick = { importer.launch(arrayOf("application/zip", "application/octet-stream")) }) {
-            Text("导入模型包")
+    SettingsPanel(modifier) {
+        Group("系统 TTS") {
+            NoteRow("实验性功能，可能会造成卡顿", isError = true)
+            SliderRow(
+                title = "语速",
+                valueText = "%.1f".format(state.voiceSettings.rate),
+                value = state.voiceSettings.rate,
+                onValueChange = { viewModel.updateVoiceSettings(state.voiceSettings.copy(rate = it)) },
+                valueRange = 0.5f..1.8f,
+            )
+            SliderRow(
+                title = "音调",
+                valueText = "%.1f".format(state.voiceSettings.pitch),
+                value = state.voiceSettings.pitch,
+                onValueChange = { viewModel.updateVoiceSettings(state.voiceSettings.copy(pitch = it)) },
+                valueRange = 0.5f..1.8f,
+            )
         }
-        if (state.importedModels.isEmpty()) Text("尚未导入离线音色")
-        state.importedModels.forEach { model ->
-            Card(Modifier.fillMaxWidth()) {
-                Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) {
-                        Text(model.name, fontWeight = FontWeight.Bold)
-                        Text("${model.engine} · ${model.language} · ${model.sampleRate} Hz")
-                    }
-                    IconButton({ viewModel.deleteVoiceModel(model.id) }) { Icon(Icons.Default.Delete, "删除") }
-                }
+        Group("离线自定义音色") {
+            ActionRow(
+                label = "导入模型包",
+                onClick = { importer.launch(arrayOf("application/zip", "application/octet-stream")) },
+                hint = "导入 VITS/Piper ONNX ZIP 模型包，根目录需包含 manifest.json、model.onnx、tokens.txt。",
+            )
+            if (state.importedModels.isEmpty()) NoteRow("尚未导入离线音色")
+            state.importedModels.forEach { model ->
+                Entry(
+                    title = model.name,
+                    description = "${model.engine} · ${model.language} · ${model.sampleRate} Hz",
+                    trailing = {
+                        IconButton(onClick = { viewModel.deleteVoiceModel(model.id) }) {
+                            Icon(Icons.Default.Delete, "删除")
+                        }
+                    },
+                )
             }
         }
-        Text("当前天气朗读使用系统 TTS；ONNX 推理将在 sherpa-onnx 运行库接入后启用。", color = MaterialTheme.colorScheme.error)
     }
 }
 
