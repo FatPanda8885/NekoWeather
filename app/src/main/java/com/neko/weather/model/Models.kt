@@ -165,8 +165,46 @@ data class DisplaySettings(
     val language: AppLanguage = AppLanguage.SIMPLIFIED_CHINESE,
 )
 
-const val DEFAULT_AI_REQUEST_JSON =
+const val DEFAULT_AI_CONTEXT = "你是专业天气生活顾问。请用简洁中文给出有依据、可执行的建议，不要夸大风险。"
+
+const val DEFAULT_ANTHROPIC_REQUEST_JSON =
     """{"model":{{model_json}},"max_tokens":{{max_tokens}},"system":{{context_json}},"messages":[{"role":"user","content":{{weather_json}}}]}"""
+
+const val DEFAULT_OPENAI_REQUEST_JSON =
+    """{"model":{{model_json}},"max_tokens":{{max_tokens}},"messages":[{"role":"system","content":{{context_json}}},{"role":"user","content":{{weather_json}}}]}"""
+
+const val DEFAULT_AI_REQUEST_JSON = DEFAULT_ANTHROPIC_REQUEST_JSON
+
+/** 请求协议：决定默认地址、默认请求体模板、请求头与响应解析方式。 */
+enum class AiProtocol(val label: String, val defaultEndpoint: String, val defaultRequestJson: String) {
+    ANTHROPIC_MESSAGES("Anthropic Messages", "https://api.anthropic.com/v1/messages", DEFAULT_ANTHROPIC_REQUEST_JSON),
+    OPENAI_CHAT("OpenAI 兼容", "https://api.openai.com/v1/chat/completions", DEFAULT_OPENAI_REQUEST_JSON);
+
+    companion object {
+        /** 未知（例如旧版本写入）协议名回退到 Anthropic Messages。 */
+        fun fromName(raw: String): AiProtocol = entries.firstOrNull { it.name == raw } ?: ANTHROPIC_MESSAGES
+    }
+}
+
+data class AiModelProfile(
+    val id: String,
+    val name: String,
+    val protocol: AiProtocol = AiProtocol.ANTHROPIC_MESSAGES,
+    val endpoint: String = protocol.defaultEndpoint,
+    val apiKey: String = "",
+    val model: String = "",
+    val maxTokens: Int = 800,
+    val maxOutputCharacters: Int = 1200,
+    val context: String = DEFAULT_AI_CONTEXT,
+    val rawRequestJson: String = protocol.defaultRequestJson,
+)
+
+data class AiProfiles(
+    val models: List<AiModelProfile> = emptyList(),
+    val selectedId: String = "",
+) {
+    val selected: AiModelProfile? get() = models.firstOrNull { it.id == selectedId } ?: models.firstOrNull()
+}
 
 data class AiSettings(
     val endpoint: String = "https://api.anthropic.com/v1/messages",
@@ -174,8 +212,8 @@ data class AiSettings(
     val model: String = "claude-3-5-haiku-latest",
     val maxTokens: Int = 800,
     val maxOutputCharacters: Int = 1200,
-    val context: String = "你是专业天气生活顾问。请用简洁中文给出有依据、可执行的建议，不要夸大风险。",
-    val rawRequestJson: String = DEFAULT_AI_REQUEST_JSON,
+    val context: String = DEFAULT_AI_CONTEXT,
+    val rawRequestJson: String = DEFAULT_ANTHROPIC_REQUEST_JSON,
 )
 
 data class WeatherProviderProfile(

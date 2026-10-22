@@ -1,6 +1,7 @@
 package com.neko.weather.ui.settings
 
 import androidx.compose.foundation.ScrollState
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -155,6 +156,7 @@ class SettingsScope internal constructor() {
     }
 
     /** Renders a list-style navigation or info row. */
+    @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
     @Composable
     fun Entry(
         icon: ImageVector? = null,
@@ -164,6 +166,7 @@ class SettingsScope internal constructor() {
         trailing: (@Composable () -> Unit)? = null,
         showChevron: Boolean = false,
         onClick: (() -> Unit)? = null,
+        onLongClick: (() -> Unit)? = null,
         hint: String? = null,
     ) {
         val colorScheme = MaterialTheme.colorScheme
@@ -171,7 +174,13 @@ class SettingsScope internal constructor() {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .then(if (onClick == null) Modifier else Modifier.clickable(onClick = onClick))
+                    .then(
+                        when {
+                            onClick != null && onLongClick != null -> Modifier.combinedClickable(onClick = onClick, onLongClick = onLongClick)
+                            onClick != null -> Modifier.clickable(onClick = onClick)
+                            else -> Modifier
+                        },
+                    )
                     .defaultMinSize(minHeight = 56.dp)
                     .padding(horizontal = 16.dp),
                 verticalAlignment = Alignment.CenterVertically,

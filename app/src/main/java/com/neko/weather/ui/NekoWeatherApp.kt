@@ -67,6 +67,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.automirrored.outlined.DirectionsRun
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Refresh
@@ -78,6 +79,7 @@ import androidx.compose.material.icons.outlined.Air
 import androidx.compose.material.icons.outlined.AutoAwesome
 import androidx.compose.material.icons.outlined.Checkroom
 import androidx.compose.material.icons.outlined.Cloud
+import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Grain
 import androidx.compose.material.icons.outlined.LightMode
 import androidx.compose.material.icons.outlined.LocationCity
@@ -103,6 +105,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
@@ -180,7 +183,8 @@ import com.neko.weather.model.DEFAULT_OPEN_METEO_QUERY
 import com.neko.weather.model.DailyForecast
 import com.neko.weather.model.HOT_CITIES
 import com.neko.weather.model.HourlyForecast
-import com.neko.weather.model.DEFAULT_AI_REQUEST_JSON
+import com.neko.weather.model.AiModelProfile
+import com.neko.weather.model.AiProtocol
 import com.neko.weather.model.WeatherProviderProfile
 import com.neko.weather.model.AirProviderProfile
 import com.neko.weather.model.AlertProviderProfile
@@ -238,10 +242,12 @@ private object SettingsPageId {
     const val BACKUP = 10
     const val API_USAGE = 11
     const val DISPLAY_AND_REFRESH = 12
-    val CHILD_PAGES = setOf(PROVIDERS, VOICE, ABOUT, APPEARANCE, AI, NOTIFICATIONS, BACKUP, API_USAGE, DISPLAY_AND_REFRESH)
+    const val AI_EDITOR = 13
+    val CHILD_PAGES = setOf(PROVIDERS, VOICE, ABOUT, APPEARANCE, AI, AI_EDITOR, NOTIFICATIONS, BACKUP, API_USAGE, DISPLAY_AND_REFRESH)
 }
 
 private fun parentPageOf(page: Int): Int = when (page) {
+    SettingsPageId.AI_EDITOR -> SettingsPageId.AI
     SettingsPageId.LIVE2D_EDITOR -> SettingsPageId.APPEARANCE
     in SettingsPageId.CHILD_PAGES -> SettingsPageId.ROOT
     else -> 0
@@ -255,6 +261,9 @@ fun NekoWeatherApp(viewModel: MainViewModel) {
     var page by rememberSaveable { mutableIntStateOf(0) }
     var providerMenuExpanded by remember { mutableStateOf(false) }
     var showQWeatherPreset by remember { mutableStateOf(false) }
+    var aiEditingId by remember { mutableStateOf<String?>(null) }
+    var aiSelectionMode by remember { mutableStateOf(false) }
+    var aiSelectedIds by remember { mutableStateOf(emptySet<String>()) }
     val settingsScrollState = rememberScrollState()
     var clockTick by remember { mutableLongStateOf(System.currentTimeMillis()) }
     val isNight = state.weather?.let { isNightTime(it, clockTick) } == true
@@ -267,6 +276,14 @@ fun NekoWeatherApp(viewModel: MainViewModel) {
 
     BackHandler(enabled = page != 0) {
         page = parentPageOf(page)
+    }
+
+    LaunchedEffect(page) {
+        if (page != SettingsPageId.AI) {
+            aiSelectionMode = false
+            aiSelectedIds = emptySet()
+        }
+        if (page != SettingsPageId.AI_EDITOR) aiEditingId = null
     }
 
     DisposableEffect(lifecycleOwner) {
@@ -363,6 +380,7 @@ fun NekoWeatherApp(viewModel: MainViewModel) {
                                             SettingsPageId.BACKUP -> "备份与还原"
                                             SettingsPageId.API_USAGE -> "API 请求统计"
                                             SettingsPageId.DISPLAY_AND_REFRESH -> "显示与更新"
+                                            SettingsPageId.AI_EDITOR -> "AI 模型"
                                             else -> "AI 天气建议"
                                         },
                                     )
@@ -375,6 +393,14 @@ fun NekoWeatherApp(viewModel: MainViewModel) {
                                     }
                                 },
                                 actions = {
+                                    if (targetPage == SettingsPageId.AI) {
+                                        IconButton(onClick = {
+                                            aiEditingId = null
+                                            page = SettingsPageId.AI_EDITOR
+                                        }) {
+                                            Icon(Icons.Default.Add, "添加模型")
+                                        }
+                                    }
                                     if (targetPage == SettingsPageId.PROVIDERS) {
                                         Box {
                                             IconButton(onClick = { providerMenuExpanded = true }) {
@@ -400,7 +426,6 @@ fun NekoWeatherApp(viewModel: MainViewModel) {
                     ) { padding ->
                         when (targetPage) {
                             SettingsPageId.ROOT -> SettingsPage(
-                                state = state,
                                 onOpenPage = { page = it },
                                 scrollState = settingsScrollState,
                                 modifier = Modifier.padding(padding),
@@ -415,7 +440,38 @@ fun NekoWeatherApp(viewModel: MainViewModel) {
                             SettingsPageId.BACKUP -> BackupRestorePage(viewModel, Modifier.padding(padding))
                             SettingsPageId.API_USAGE -> ApiUsagePage(Modifier.padding(padding))
                             SettingsPageId.DISPLAY_AND_REFRESH -> DisplayAndRefreshPage(state, viewModel, Modifier.padding(padding))
-                            else -> AiSettingsPage(state, viewModel, Modifier.padding(padding))
+                            SettingsPageId.AI -> AiProfilesPage(
+                                state = state,
+                                viewModel = viewModel,
+                                selectionMode = aiSelectionMode,
+                                selectedIds = aiSelectedIds,
+                                onToggleSelection = { id ->
+                                    aiSelectedIds = if (id in aiSelectedIds) aiSelectedIds - id else aiSelectedIds + id
+                                },
+                                onStartSelection = { id ->
+                                    aiSelectionMode = true
+                                    aiSelectedIds = setOf(id)
+                                },
+                                onExitSelection = {
+                                    aiSelectionMode = false
+                                    aiSelectedIds = emptySet()
+                                },
+                                onEdit = { id ->
+                                    aiEditingId = id
+                                    page = SettingsPageId.AI_EDITOR
+                                },
+                                modifier = Modifier.padding(padding),
+                            )
+                            SettingsPageId.AI_EDITOR -> AiProfileEditorPage(
+                                state = state,
+                                viewModel = viewModel,
+                                editingId = aiEditingId,
+                                onDone = {
+                                    page = SettingsPageId.AI
+                                    aiEditingId = null
+                                },
+                                modifier = Modifier.padding(padding),
+                            )
                         }
                     }
                 }
@@ -541,7 +597,7 @@ private fun WeatherPage(
                         onNextCity = { viewModel.switchHomeCity(1) },
                         aiAdvice = state.aiAdvice,
                         aiLoading = state.aiLoading,
-                        aiConfigured = state.aiSettings.apiKey.isNotBlank(),
+                        aiConfigured = state.aiProfiles.selected?.apiKey?.isNotBlank() == true,
                         onRequestAiAdvice = viewModel::requestAiAdvice,
                         onClearAiAdvice = viewModel::clearAiAdvice,
                         onToggleLive2d = { viewModel.setLive2dHidden(!state.customization.live2dHidden) },
@@ -2118,33 +2174,26 @@ private fun CityResultRow(city: CityLocation, selected: Boolean, onClick: () -> 
 
 @Composable
 private fun SettingsPage(
-    state: MainUiState,
     onOpenPage: (Int) -> Unit,
     scrollState: ScrollState,
     modifier: Modifier = Modifier,
 ) {
-    val providerSubtitle = if (state.config.endpoint.contains("open-meteo.com")) {
-        "Open-Meteo · ${if (state.config.airQualityStandard == "EU") "AQI（欧标）" else "AQI（美标）"}"
-    } else {
-        "自定义 API · ${state.config.displayName}"
-    }
-    val aiSubtitle = if (state.aiSettings.apiKey.isBlank()) "Anthropic 兼容 API · 尚未配置" else state.aiSettings.model
     SettingsPanel(modifier, scrollState) {
         Group("应用与界面") {
-            Entry(icon = Icons.Outlined.Palette, title = "外观与主题", description = "语言、字体、Logo、背景与 Live2D", showChevron = true, onClick = { onOpenPage(SettingsPageId.APPEARANCE) })
-            Entry(icon = Icons.Outlined.LightMode, title = "显示与更新", description = "温度与风速单位、自动刷新", showChevron = true, onClick = { onOpenPage(SettingsPageId.DISPLAY_AND_REFRESH) })
-            Entry(icon = Icons.Default.GraphicEq, title = "语音与音色", description = "系统 TTS 语速、音调与离线音色", showChevron = true, onClick = { onOpenPage(SettingsPageId.VOICE) })
+            Entry(icon = Icons.Outlined.Palette, title = "外观与主题", showChevron = true, onClick = { onOpenPage(SettingsPageId.APPEARANCE) })
+            Entry(icon = Icons.Outlined.LightMode, title = "显示与更新", showChevron = true, onClick = { onOpenPage(SettingsPageId.DISPLAY_AND_REFRESH) })
+            Entry(icon = Icons.Default.GraphicEq, title = "语音与音色", showChevron = true, onClick = { onOpenPage(SettingsPageId.VOICE) })
         }
         Group("数据与网络") {
-            Entry(icon = Icons.Outlined.Cloud, title = "天气数据供应商", description = providerSubtitle, showChevron = true, onClick = { onOpenPage(SettingsPageId.PROVIDERS) })
-            Entry(icon = Icons.Outlined.AutoAwesome, title = "AI 天气建议", description = aiSubtitle, showChevron = true, onClick = { onOpenPage(SettingsPageId.AI) })
+            Entry(icon = Icons.Outlined.Cloud, title = "天气数据供应商", showChevron = true, onClick = { onOpenPage(SettingsPageId.PROVIDERS) })
+            Entry(icon = Icons.Outlined.AutoAwesome, title = "AI 天气建议", showChevron = true, onClick = { onOpenPage(SettingsPageId.AI) })
         }
         Group("提醒") {
-            Entry(icon = Icons.Outlined.Notifications, title = "通知提醒", description = "每日天气、周报、降雨与灾害预警", showChevron = true, onClick = { onOpenPage(SettingsPageId.NOTIFICATIONS) })
+            Entry(icon = Icons.Outlined.Notifications, title = "通知提醒", showChevron = true, onClick = { onOpenPage(SettingsPageId.NOTIFICATIONS) })
         }
         Group("其他") {
-            Entry(icon = Icons.Outlined.SettingsBackupRestore, title = "备份与还原", description = "导出或还原配置、皮肤与统计数据", showChevron = true, onClick = { onOpenPage(SettingsPageId.BACKUP) })
-            Entry(icon = Icons.Outlined.Info, title = "关于", description = "版本信息、开源仓库与检查更新", showChevron = true, onClick = { onOpenPage(SettingsPageId.ABOUT) })
+            Entry(icon = Icons.Outlined.SettingsBackupRestore, title = "备份与还原", showChevron = true, onClick = { onOpenPage(SettingsPageId.BACKUP) })
+            Entry(icon = Icons.Outlined.Info, title = "关于", showChevron = true, onClick = { onOpenPage(SettingsPageId.ABOUT) })
         }
     }
 }
@@ -2826,53 +2875,176 @@ private fun Live2dLayoutEditor(state: MainUiState, viewModel: MainViewModel, mod
 }
 
 @Composable
-private fun AiSettingsPage(state: MainUiState, viewModel: MainViewModel, modifier: Modifier = Modifier) {
-    var config by remember(state.aiSettings) { mutableStateOf(state.aiSettings) }
-    var maxTokensText by remember(state.aiSettings.maxTokens) { mutableStateOf(state.aiSettings.maxTokens.toString()) }
-    var maxCharactersText by remember(state.aiSettings.maxOutputCharacters) { mutableStateOf(state.aiSettings.maxOutputCharacters.toString()) }
+private fun AiProfilesPage(
+    state: MainUiState,
+    viewModel: MainViewModel,
+    selectionMode: Boolean,
+    selectedIds: Set<String>,
+    onToggleSelection: (String) -> Unit,
+    onStartSelection: (String) -> Unit,
+    onExitSelection: () -> Unit,
+    onEdit: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val profiles = state.aiProfiles
+    var renameTargetId by remember { mutableStateOf<String?>(null) }
+    var renameText by remember { mutableStateOf("") }
+    var confirmingDelete by remember { mutableStateOf(false) }
+    SettingsPanel(modifier) {
+        if (selectionMode) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = "已选 ${selectedIds.size} 项",
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.weight(1f),
+                )
+                TextButton(
+                    onClick = {
+                        val target = selectedIds.singleOrNull()
+                        renameTargetId = target
+                        renameText = profiles.models.firstOrNull { it.id == target }?.name.orEmpty()
+                    },
+                    enabled = selectedIds.size == 1,
+                ) {
+                    Text("重命名")
+                }
+                TextButton(onClick = { confirmingDelete = true }, enabled = selectedIds.isNotEmpty()) {
+                    Text("删除")
+                }
+                TextButton(onClick = onExitSelection) {
+                    Text("取消")
+                }
+            }
+        }
+        Group("模型") {
+            if (profiles.models.isEmpty()) NoteRow("尚未添加模型，点击右上角 + 添加。")
+            profiles.models.forEach { profile ->
+                Entry(
+                    title = profile.name,
+                    description = "${profile.protocol.label} · ${profile.model}",
+                    trailingText = if (profile.id == profiles.selected?.id) "当前使用" else null,
+                    trailing = {
+                        if (selectionMode) {
+                            Checkbox(checked = profile.id in selectedIds, onCheckedChange = { onToggleSelection(profile.id) })
+                        } else {
+                            IconButton(onClick = { onEdit(profile.id) }) {
+                                Icon(Icons.Outlined.Edit, "编辑")
+                            }
+                        }
+                    },
+                    onClick = { if (selectionMode) onToggleSelection(profile.id) else viewModel.selectAiProfile(profile.id) },
+                    onLongClick = { onStartSelection(profile.id) },
+                )
+            }
+        }
+    }
+    renameTargetId?.let { id ->
+        AlertDialog(
+            onDismissRequest = { renameTargetId = null },
+            title = { Text("重命名模型") },
+            text = {
+                OutlinedTextField(
+                    value = renameText,
+                    onValueChange = { renameText = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    label = { Text("名称") },
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    viewModel.renameAiProfile(id, renameText)
+                    renameTargetId = null
+                }) { Text("确定") }
+            },
+            dismissButton = { TextButton(onClick = { renameTargetId = null }) { Text("取消") } },
+        )
+    }
+    if (confirmingDelete) {
+        AlertDialog(
+            onDismissRequest = { confirmingDelete = false },
+            title = { Text("删除模型") },
+            text = { Text("确定删除所选模型？该操作不可撤销。") },
+            confirmButton = {
+                TextButton(onClick = {
+                    viewModel.deleteAiProfiles(selectedIds)
+                    confirmingDelete = false
+                    onExitSelection()
+                }) { Text("删除") }
+            },
+            dismissButton = { TextButton(onClick = { confirmingDelete = false }) { Text("取消") } },
+        )
+    }
+}
+
+@Composable
+private fun AiProfileEditorPage(
+    state: MainUiState,
+    viewModel: MainViewModel,
+    editingId: String?,
+    onDone: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val initial = remember(editingId, state.aiProfiles) {
+        state.aiProfiles.models.firstOrNull { it.id == editingId } ?: AiModelProfile(id = "", name = "")
+    }
+    var draft by remember(initial) { mutableStateOf(initial) }
+    var maxTokensText by remember(initial) { mutableStateOf(initial.maxTokens.toString()) }
+    var maxCharactersText by remember(initial) { mutableStateOf(initial.maxOutputCharacters.toString()) }
+    var confirmingDelete by remember { mutableStateOf(false) }
     val maxTokensValue = maxTokensText.toIntOrNull()
     val maxCharactersValue = maxCharactersText.toIntOrNull()
-    val jsonError = remember(config.rawRequestJson) {
+    val jsonError = remember(draft.rawRequestJson, draft.model, draft.maxTokens, draft.context) {
         runCatching {
-            val preview = config.rawRequestJson
-                .replace("{{model_json}}", org.json.JSONObject.quote(config.model))
-                .replace("{{max_tokens}}", config.maxTokens.toString())
-                .replace("{{context_json}}", org.json.JSONObject.quote(config.context))
-                .replace("{{weather_json}}", org.json.JSONObject.quote("weather"))
-            org.json.JSONObject(preview)
+            val preview = draft.rawRequestJson
+                .replace("{{model_json}}", JSONObject.quote(draft.model))
+                .replace("{{max_tokens}}", draft.maxTokens.toString())
+                .replace("{{context_json}}", JSONObject.quote(draft.context))
+                .replace("{{weather_json}}", JSONObject.quote("weather"))
+            JSONObject(preview)
         }.exceptionOrNull()?.message
     }
+    val valid = draft.name.isNotBlank() &&
+        draft.model.isNotBlank() &&
+        (draft.endpoint.isBlank() || draft.endpoint.startsWith("https://")) &&
+        maxTokensValue != null && maxTokensValue in 64..8192 &&
+        maxCharactersValue != null && maxCharactersValue in 100..10000 &&
+        jsonError == null
     SettingsPanel(modifier) {
-        Group(
-            title = "Anthropic 兼容配置",
-            description = "请求会同时发送 x-api-key、Authorization Bearer 和 anthropic-version 请求头，以兼容官方 API 与常见网关。",
-        ) {
-            TextFieldRow(
-                label = "API 地址（HTTPS）",
-                value = config.endpoint,
-                onValueChange = { config = config.copy(endpoint = it) },
-            )
-            ActionRow(
-                label = "使用 DeepSeek（Anthropic 兼容）",
-                onClick = {
-                    config = config.copy(
-                        endpoint = "https://api.deepseek.com/anthropic/v1/messages",
-                        model = "deepseek-v4-flash",
-                        rawRequestJson = DEFAULT_AI_REQUEST_JSON,
+        SectionLabel(if (editingId == null) "新增模型" else "编辑模型")
+        Group("基本信息") {
+            ChoiceRow(
+                label = "协议",
+                options = listOf(
+                    ChoiceOption(AiProtocol.ANTHROPIC_MESSAGES.name, AiProtocol.ANTHROPIC_MESSAGES.label),
+                    ChoiceOption(AiProtocol.OPENAI_CHAT.name, AiProtocol.OPENAI_CHAT.label),
+                ),
+                selected = draft.protocol.name,
+                onSelect = { key ->
+                    val next = AiProtocol.fromName(key)
+                    val previous = draft.protocol
+                    draft = draft.copy(
+                        protocol = next,
+                        endpoint = if (draft.endpoint.isBlank() || draft.endpoint == previous.defaultEndpoint) next.defaultEndpoint else draft.endpoint,
+                        rawRequestJson = if (draft.rawRequestJson.isBlank() || draft.rawRequestJson == previous.defaultRequestJson) next.defaultRequestJson else draft.rawRequestJson,
                     )
                 },
+                columns = 2,
             )
+            TextFieldRow(label = "名称", value = draft.name, onValueChange = { draft = draft.copy(name = it) })
             TextFieldRow(
-                label = "API Key",
-                value = config.apiKey,
-                onValueChange = { config = config.copy(apiKey = it) },
-                password = true,
+                label = "API 地址",
+                value = draft.endpoint,
+                onValueChange = { draft = draft.copy(endpoint = it) },
+                supportingText = "留空将使用协议默认地址",
             )
-            TextFieldRow(
-                label = "模型",
-                value = config.model,
-                onValueChange = { config = config.copy(model = it) },
-            )
+            TextFieldRow(label = "API Key", value = draft.apiKey, onValueChange = { draft = draft.copy(apiKey = it) }, password = true)
+            TextFieldRow(label = "模型", value = draft.model, onValueChange = { draft = draft.copy(model = it) })
         }
         Group("生成参数") {
             TextFieldRow(
@@ -2880,7 +3052,7 @@ private fun AiSettingsPage(state: MainUiState, viewModel: MainViewModel, modifie
                 value = maxTokensText,
                 onValueChange = {
                     maxTokensText = it.filter(Char::isDigit)
-                    maxTokensText.toIntOrNull()?.let { value -> config = config.copy(maxTokens = value) }
+                    maxTokensText.toIntOrNull()?.let { value -> draft = draft.copy(maxTokens = value) }
                 },
             )
             if (maxTokensValue == null || maxTokensValue !in 64..8192) NoteRow("请输入 64～8192", isError = true)
@@ -2889,23 +3061,23 @@ private fun AiSettingsPage(state: MainUiState, viewModel: MainViewModel, modifie
                 value = maxCharactersText,
                 onValueChange = {
                     maxCharactersText = it.filter(Char::isDigit)
-                    maxCharactersText.toIntOrNull()?.let { value -> config = config.copy(maxOutputCharacters = value) }
+                    maxCharactersText.toIntOrNull()?.let { value -> draft = draft.copy(maxOutputCharacters = value) }
                 },
             )
             if (maxCharactersValue == null || maxCharactersValue !in 100..10000) NoteRow("请输入 100～10000", isError = true)
-        }
-        Group("System Prompt 与请求体") {
             TextFieldRow(
                 label = "上下文 / System Prompt",
-                value = config.context,
-                onValueChange = { config = config.copy(context = it) },
+                value = draft.context,
+                onValueChange = { draft = draft.copy(context = it) },
                 singleLine = false,
                 minLines = 3,
             )
+        }
+        Group("请求体模板") {
             TextFieldRow(
                 label = "请求体",
-                value = config.rawRequestJson,
-                onValueChange = { config = config.copy(rawRequestJson = it) },
+                value = draft.rawRequestJson,
+                onValueChange = { draft = draft.copy(rawRequestJson = it) },
                 supportingText = jsonError?.let { "JSON 无效：$it" } ?: "发送前会替换占位符并再次校验",
                 isError = jsonError != null,
                 singleLine = false,
@@ -2913,20 +3085,45 @@ private fun AiSettingsPage(state: MainUiState, viewModel: MainViewModel, modifie
                 monospace = true,
                 hint = "可用占位符：{{model_json}}、{{max_tokens}}、{{context_json}}、{{weather_json}}",
             )
-            ActionRow(
-                label = "恢复默认请求 JSON",
-                onClick = { config = config.copy(rawRequestJson = DEFAULT_AI_REQUEST_JSON) },
-            )
+            ActionRow("恢复协议默认模板", { draft = draft.copy(rawRequestJson = draft.protocol.defaultRequestJson) })
         }
-        Group("保存") {
+        Group("操作") {
             ActionRow(
-                label = "保存 AI 配置",
-                onClick = { viewModel.saveAiSettings(config.copy(maxTokens = maxTokensValue!!, maxOutputCharacters = maxCharactersValue!!)) },
-                enabled = config.endpoint.startsWith("https://") && config.model.isNotBlank() && jsonError == null && maxTokensValue in 64..8192 && maxCharactersValue in 100..10000,
+                label = "保存",
+                onClick = {
+                    viewModel.saveAiProfile(
+                        draft.copy(
+                            name = draft.name.trim(),
+                            endpoint = draft.endpoint.trim().ifBlank { draft.protocol.defaultEndpoint },
+                            maxTokens = maxTokensValue ?: draft.maxTokens,
+                            maxOutputCharacters = maxCharactersValue ?: draft.maxOutputCharacters,
+                        ),
+                    )
+                    onDone()
+                },
+                enabled = valid,
                 emphasis = ActionEmphasis.PRIMARY,
             )
-            NoteRow("API Key 未加密存储，请勿在截图或分享配置时泄露。", isError = true)
+            if (editingId != null) {
+                ActionRow("删除该模型", { confirmingDelete = true }, emphasis = ActionEmphasis.TEXT)
+            }
         }
+        NoteRow("API Key 未加密存储，请勿在截图或分享配置时泄露。", isError = true)
+    }
+    if (confirmingDelete) {
+        AlertDialog(
+            onDismissRequest = { confirmingDelete = false },
+            title = { Text("删除模型") },
+            text = { Text("确定删除「${draft.name}」？该操作不可撤销。") },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmingDelete = false
+                    viewModel.deleteAiProfiles(setOf(draft.id))
+                    onDone()
+                }) { Text("删除") }
+            },
+            dismissButton = { TextButton(onClick = { confirmingDelete = false }) { Text("取消") } },
+        )
     }
 }
 

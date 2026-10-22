@@ -26,6 +26,7 @@ private val ENGLISH_REPLACEMENTS = listOf(
     "文件读取失败" to "Failed to read document",
     "API Key 未加密存储，请勿在截图或分享配置时泄露。" to "API keys are stored unencrypted. Do not expose them in screenshots or shared configurations.",
     "说明" to "About this setting",
+    " 项" to " items", "重命名模型" to "Rename model", "确定删除所选模型？该操作不可撤销。" to "Delete the selected models? This cannot be undone.",
     "API Key 和 AI Key 可能包含在“设置”备份中，请妥善保存备份文件。" to "API and AI keys may be included in a Settings backup. Store backup files securely.",
     "打开“主页”开关后，可在天气主页的大温度区域左右滑动切换。" to "Enable Home, then swipe across the large temperature area to switch cities.",
     "导入 VITS/Piper ONNX ZIP 模型包，根目录需包含 manifest.json、model.onnx、tokens.txt。" to "Import a VITS/Piper ONNX ZIP containing manifest.json, model.onnx and tokens.txt at its root.",
@@ -551,6 +552,22 @@ private val ENGLISH_REPLACEMENTS = listOf(
     "Open-Meteo · AQI（美标）" to "Open-Meteo · AQI (US)",
     "Anthropic 兼容 API · 尚未配置" to "Anthropic-compatible API · not configured",
     "更多供应商设置" to "More provider settings",
+    // AI model list
+    "尚未添加模型，点击右上角 + 添加。" to "No models yet. Tap + in the top right to add one.",
+    "留空将使用协议默认地址" to "Leave empty to use the protocol's default endpoint",
+    "恢复协议默认模板" to "Restore protocol default template",
+    "System Prompt 与请求体" to "System Prompt & request body",
+    "编辑模型" to "Edit model", "删除该模型" to "Delete this model", "重命名" to "Rename",
+    "新增模型" to "New model", "添加模型" to "Add model", "模型列表" to "Model list",
+    "模型已保存" to "Model saved", "AI 模型" to "AI model", "基本信息" to "Basic information",
+    "生成参数" to "Generation parameters", "请求体模板" to "Request body template",
+    "输入新名称" to "Enter a new name", "请先添加一个 AI 模型" to "Add an AI model first",
+    "API 地址" to "API endpoint", "OpenAI 兼容" to "OpenAI compatible",
+    "协议" to "Protocol", "名称" to "Name", "已选" to "Selected",
+    // Substring guards for the short keys above
+    "模型已重命名" to "Model renamed",
+    "AI API 地址必须使用 HTTPS" to "AI API address must use HTTPS",
+    "API 地址格式不正确" to "Invalid API address format",
 )
 
 private fun toJapanese(source: String): String {
@@ -562,7 +579,7 @@ private fun toJapanese(source: String): String {
 }
 
 private val JAPANESE_REPLACEMENTS = listOf(
-    "第三方内容使用说明" to "第三者コンテンツ利用規約", "GNU GPLv3 开源协议" to "GNU GPLv3ライセンス", "说明" to "説明を表示",
+    "第三方内容使用说明" to "第三者コンテンツ利用規約", "GNU GPLv3 开源协议" to "GNU GPLv3ライセンス", "说明" to "説明を表示", " 项" to " 件", "重命名模型" to "モデル名を変更", "确定删除所选模型？该操作不可撤销。" to "選択したモデルを削除しますか？この操作は元に戻せません。",
     "请滚动至文末后继续" to "最後までスクロールして続行してください", "同意并继续" to "同意して続行",
     "请完整阅读" to "全文をお読みください", "关闭" to "閉じる", "文件读取失败" to "文書を読み込めませんでした",
     "系统 TTS · 已导入 " to "システムTTS・インポート済み ", " 个离线模型" to "個のオフラインモデル",
@@ -838,6 +855,23 @@ private val JAPANESE_REPLACEMENTS = listOf(
     // Substring guards: longer strings must be replaced before the short keys above
     "天气提醒" to "天気の通知",
     "自动模式在中国大陆使用高德，其他地区使用 OpenStreetMap。也可以手动固定供应商。" to "自動モードでは中国本土でAmap、その他の地域ではOpenStreetMapを使用します。プロバイダーを手動で固定することもできます。",
+    // AI model list
+    "尚未添加模型，点击右上角 + 添加。" to "モデルがまだありません。右上の + から追加してください。",
+    "留空将使用协议默认地址" to "空欄の場合はプロトコルの既定アドレスを使用します",
+    "恢复协议默认模板" to "プロトコルの既定テンプレートに戻す",
+    "System Prompt 与请求体" to "System Prompt とリクエスト本文",
+    "API Key 名称" to "APIキー名", "API 地址（HTTPS）" to "APIエンドポイント（HTTPS）", "模板名称" to "テンプレート名",
+    "编辑模型" to "モデルを編集", "删除该模型" to "このモデルを削除", "重命名" to "名前を変更",
+    "新增模型" to "新しいモデル", "添加模型" to "モデルを追加", "模型列表" to "モデル一覧",
+    "模型已保存" to "モデルを保存しました", "AI 模型" to "AIモデル", "基本信息" to "基本情報",
+    "生成参数" to "生成パラメータ", "请求体模板" to "リクエスト本文テンプレート", "请求体" to "リクエスト本文",
+    "输入新名称" to "新しい名前を入力", "请先添加一个 AI 模型" to "先にAIモデルを追加してください",
+    "API 地址" to "APIエンドポイント", "OpenAI 兼容" to "OpenAI互換",
+    "协议" to "プロトコル", "名称" to "名前", "已选" to "選択中",
+    // Substring guards for the short keys above
+    "模型已重命名" to "モデル名を変更しました",
+    "AI API 地址必须使用 HTTPS" to "AI APIアドレスはHTTPSを使用してください",
+    "API 地址格式不正确" to "APIアドレスの形式が正しくありません",
 )
 
 private fun toTraditionalChinese(source: String): String {

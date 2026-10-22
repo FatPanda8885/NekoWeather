@@ -30,10 +30,12 @@ import com.neko.weather.data.CustomizationManager
 import com.neko.weather.model.CustomizationSettings
 import com.neko.weather.model.Live2dPlacement
 import com.neko.weather.model.WeatherRefreshSettings
-import com.neko.weather.model.AiSettings
+import com.neko.weather.model.AiModelProfile
+import com.neko.weather.model.AiProfiles
 import com.neko.weather.model.DisplaySettings
 import com.neko.weather.model.TemperatureUnit
 import com.neko.weather.data.AiAdviceRepository
+import com.neko.weather.data.AiProfileStore
 import com.neko.weather.data.ProviderProfileStore
 import com.neko.weather.data.BackupManager
 import com.neko.weather.data.ApiUsageTracker
@@ -52,6 +54,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.withContext
+import java.util.UUID
 import kotlin.math.roundToInt
 
 data class MainUiState(
@@ -70,7 +73,7 @@ data class MainUiState(
     val updateInfo: UpdateInfo? = null,
     val customization: CustomizationSettings = CustomizationSettings(),
     val refreshSettings: WeatherRefreshSettings = WeatherRefreshSettings(),
-    val aiSettings: AiSettings = AiSettings(),
+    val aiProfiles: AiProfiles = AiProfiles(),
     val aiAdvice: String? = null,
     val aiLoading: Boolean = false,
     val providerProfiles: ProviderProfiles = defaultProviderProfiles(),
@@ -90,6 +93,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val customizationManager = CustomizationManager(application)
     private val aiAdviceRepository = AiAdviceRepository()
     private val providerProfileStore = ProviderProfileStore(application)
+    private val aiProfileStore = AiProfileStore(application)
     private val backupManager = BackupManager(application)
 
     private val initialConfig = store.loadWeatherConfig().also {
@@ -115,7 +119,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             notificationSettings = store.loadNotificationSettings(),
             customization = customizationManager.load(),
             refreshSettings = store.loadWeatherRefreshSettings(),
-            aiSettings = store.loadAiSettings(),
+            aiProfiles = aiProfileStore.load(store.loadAiSettings()),
             providerProfiles = providerProfileStore.load(initialConfig),
             displaySettings = store.loadDisplaySettings(),
         ),
@@ -256,13 +260,52 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         LauncherLabelManager.sync(getApplication(), language)
     }
 
-    fun saveAiSettings(settings: AiSettings) {
-        val normalized = settings.copy(
-            maxTokens = settings.maxTokens.coerceIn(64, 8192),
-            maxOutputCharacters = settings.maxOutputCharacters.coerceIn(100, 10000),
+    fun saveAiProfile(profile: AiModelProfile) {
+        val current = _state.value.aiProfiles
+        val saved = profile.copy(
+            id = profile.id.ifBlank { UUID.randomUUID().toString() },
+            maxTokens = profile.maxTokens.coerceIn(64, 8192),
+            maxOutputCharacters = profile.maxOutputCharacters.coerceIn(100, 10000),
         )
-        store.saveAiSettings(normalized)
-        _state.update { it.copy(aiSettings = normalized, message = "AI 建议配置已保存") }
+        val models = if (current.models.any { it.id == saved.id }) {
+            current.models.map { if (it.id == saved.id) saved else it }
+        } else {
+            current.models + saved
+        }
+        val updated = current.copy(models = models, selectedId = current.selectedId.ifBlank { saved.id })
+        aiProfileStore.save(updated)
+        _state.update { it.copy(aiProfiles = updated, message = "模型已保存") }
+    }
+
+    fun selectAiProfile(id: String) {
+        val current = _state.value.aiProfiles
+        if (current.models.none { it.id == id }) return
+        val updated = current.copy(selectedId = id)
+        aiProfileStore.save(updated)
+        _state.update { it.copy(aiProfiles = updated) }
+    }
+
+    fun deleteAiProfiles(ids: Set<String>) {
+        if (ids.isEmpty()) return
+        val current = _state.value.aiProfiles
+        val models = current.models.filterNot { it.id in ids }
+        val selectedId = if (current.selectedId in ids || models.none { it.id == current.selectedId }) {
+            models.firstOrNull()?.id.orEmpty()
+        } else {
+            current.selectedId
+        }
+        val updated = current.copy(models = models, selectedId = selectedId)
+        aiProfileStore.save(updated)
+        _state.update { it.copy(aiProfiles = updated, message = "已删除 ${current.models.size - models.size} 个模型") }
+    }
+
+    fun renameAiProfile(id: String, name: String) {
+        val trimmed = name.trim()
+        if (trimmed.isEmpty()) return
+        val current = _state.value.aiProfiles
+        val updated = current.copy(models = current.models.map { if (it.id == id) it.copy(name = trimmed) else it })
+        aiProfileStore.save(updated)
+        _state.update { it.copy(aiProfiles = updated, message = "模型已重命名") }
     }
 
     fun enableQWeatherPreset(apiHost: String, apiKey: String) {
@@ -411,10 +454,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
         if (_state.value.aiLoading) return
-        val settings = _state.value.aiSettings
+        val profile = _state.value.aiProfiles.selected ?: run {
+            _state.update { it.copy(message = "请先添加一个 AI 模型") }
+            return
+        }
         viewModelScope.launch(Dispatchers.IO) {
             _state.update { it.copy(aiLoading = true) }
-            runCatching { aiAdviceRepository.request(settings, weather) }
+            runCatching { aiAdviceRepository.request(profile, weather) }
                 .onSuccess { advice -> _state.update { it.copy(aiLoading = false, aiAdvice = advice) } }
                 .onFailure { error -> _state.update { it.copy(aiLoading = false, message = error.message ?: "AI 建议生成失败") } }
         }
@@ -559,7 +605,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         notificationSettings = store.loadNotificationSettings(),
                         customization = customizationManager.load(),
                         refreshSettings = store.loadWeatherRefreshSettings(),
-                        aiSettings = store.loadAiSettings(),
+                        aiProfiles = aiProfileStore.load(store.loadAiSettings()),
                         displaySettings = store.loadDisplaySettings(),
                         savedCities = cityStore.load(),
                         providerProfiles = providerProfileStore.load(config),
