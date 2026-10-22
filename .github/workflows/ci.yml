@@ -23,6 +23,9 @@ jobs:
     name: Build and test
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # 人工批准闸门：在 Settings → Environments 新建同名环境并添加 Required reviewers 后生效。
+    # 未配置该环境时这一行是空操作，CI 仍会直接运行。
+    environment: ci-approval
     steps:
       - name: Checkout
         uses: actions/checkout@v4
