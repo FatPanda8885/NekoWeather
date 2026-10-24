@@ -33,6 +33,7 @@ import com.neko.weather.model.WeatherRefreshSettings
 import com.neko.weather.model.AiModelProfile
 import com.neko.weather.model.AiProfiles
 import com.neko.weather.model.DisplaySettings
+import com.neko.weather.model.HourlyForecast
 import com.neko.weather.model.TemperatureUnit
 import com.neko.weather.data.AiAdviceRepository
 import com.neko.weather.data.AiProfileStore
@@ -47,6 +48,7 @@ import com.neko.weather.model.WeatherProviderProfile
 import com.neko.weather.model.AirProviderProfile
 import com.neko.weather.model.AlertProviderProfile
 import com.neko.weather.model.defaultProviderProfiles
+import com.neko.weather.notification.WeatherNotificationPublisher
 import com.neko.weather.notification.WeatherNotificationScheduler
 import com.neko.weather.tts.SystemTtsController
 import com.neko.weather.tts.VoiceModelManager
@@ -138,6 +140,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private var refreshGeneration = 0L
 
     init {
+        systemTts.speakErrorHandler = { code ->
+            _state.update {
+                it.copy(message = if (code == null) "TTS 播报失败" else "TTS 播报出错（错误码 $code）")
+            }
+        }
         syncLauncherLabel(_state.value.displaySettings.language)
         refresh()
     }
@@ -159,6 +166,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     if (generation == refreshGeneration) {
                         store.saveLastWeatherUpdateMillis(weather.current.fetchedAtMillis)
                         weatherCache.save(config, weather)
+                        // 前台刷新也走通知判定：部分 ROM 会大幅推迟周期 Job，共用发布器
+                        // 与去重键保证使用期间通知照常到期
+                        runCatching { WeatherNotificationPublisher.publish(getApplication(), weather) }
                         _state.update { it.copy(weather = weather, loading = false) }
                     }
                 }
@@ -780,20 +790,28 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
         val current = weather.current
         val unit = _state.value.displaySettings.temperatureUnit
-        val spokenTemperature = when (unit) {
-            TemperatureUnit.CELSIUS -> "${current.temperature.roundToInt()}摄氏度"
-            TemperatureUnit.FAHRENHEIT -> "${(current.temperature * 9 / 5 + 32).roundToInt()}华氏度"
-            TemperatureUnit.KELVIN -> "${(current.temperature + 273.15).roundToInt()}开尔文"
+        fun spokenTemperature(celsius: Double): String = when (unit) {
+            TemperatureUnit.CELSIUS -> "${celsius.roundToInt()}摄氏度"
+            TemperatureUnit.FAHRENHEIT -> "${(celsius * 9 / 5 + 32).roundToInt()}华氏度"
+            TemperatureUnit.KELVIN -> "${(celsius + 273.15).roundToInt()}开尔文"
         }
+        val air = weather.airQuality
         val text = buildString {
             append(current.location).append("当前").append(current.condition)
-            append("，气温").append(spokenTemperature)
-            current.humidity?.let { append("，相对湿度").append(it.roundToInt()).append("百分比") }
+            append("，气温").append(spokenTemperature(current.temperature))
+            current.apparentTemperature?.let { append("，体感").append(spokenTemperature(it)) }
+            current.humidity?.let { append("，相对湿度百分之").append(it.roundToInt()) }
             current.windSpeed?.let { append("，风速每小时").append(it.roundToInt()).append("公里") }
+            air?.aqi?.let { append("，空气质量").append(aqiLabel(it, air.standard)) }
             append("。")
+            precipitationSpeech(weather.hourly)?.let { append(it).append("。") }
         }
         if (!systemTts.speak(text, _state.value.voiceSettings)) {
-            _state.update { it.copy(message = "系统语音引擎不可用，请在系统设置中安装或启用 TTS 引擎") }
+            val failureMessage = when {
+                systemTts.isEngineMissing() -> "未检测到系统 TTS 引擎，请在系统设置的语言和输入中启用文字转语音输出"
+                else -> "语音播报失败，请检查 TTS 引擎与媒体音量"
+            }
+            _state.update { it.copy(message = failureMessage) }
         }
     }
 
@@ -826,4 +844,49 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 class MainViewModelFactory(private val application: Application) : ViewModelProvider.Factory {
     @Suppress("UNCHECKED_CAST")
     override fun <T : ViewModel> create(modelClass: Class<T>): T = MainViewModel(application) as T
+}
+
+
+/** 播报用的未来三小时降水描述；无降雨（概率均低于 30%）时返回 null。 */
+private fun precipitationSpeech(hourly: List<HourlyForecast>): String? {
+    // 首条是「现在」实况槽，其后三条才是未来三小时
+    val nextThree = hourly.drop(1).take(3)
+    if (nextThree.isEmpty()) return null
+    val raining = nextThree.map { (it.precipitationProbability ?: 0.0) >= 30.0 }
+    val first = raining.indexOfFirst { it }
+    if (first < 0) return null
+    // 只看从第一个降雨小时起的连续雨带；不连续（如第 1、3 小时）时只播报第一个小时
+    var end = first
+    while (end + 1 < raining.size && raining[end + 1]) end++
+    val entry = nextThree[first]
+    val intensity = precipitationIntensity(entry.condition, entry.precipitationAmount)
+    return buildString {
+        append("${first + 1}小时后可能会下").append(intensity)
+        // 雨带延伸到第三小时仍未见放晴时不播报放晴时间
+        if (end > first && end < raining.size - 1) {
+            append("，预计").append(end + 2).append("小时后放晴")
+        }
+    }
+}
+
+/** 按天气现象（辅以小时降水量）归并为播报口径的降水强度：小/中/大雨、小/中/大雪或冰雹。 */
+private fun precipitationIntensity(condition: String, amount: Double?): String = when {
+    condition.contains("雹") -> "冰雹"
+    condition.contains("雪") -> when {
+        condition.contains("大雪") || condition.contains("暴雪") -> "大雪"
+        condition.contains("中雪") -> "中雪"
+        else -> "小雪"
+    }
+    condition.contains("雷暴") -> "大雨"
+    condition.contains("雨") -> when {
+        condition.contains("大雨") || condition.contains("暴雨") -> "大雨"
+        condition.contains("中雨") -> "中雨"
+        else -> "小雨"
+    }
+    amount != null -> when {
+        amount >= 15 -> "大雨"
+        amount >= 8 -> "中雨"
+        else -> "小雨"
+    }
+    else -> "小雨"
 }

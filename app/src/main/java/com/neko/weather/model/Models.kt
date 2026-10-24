@@ -64,9 +64,8 @@ data class WeatherSnapshot(
         append(formatNumber(temperature))
         append("摄氏度")
         humidity?.let {
-            append("，相对湿度")
+            append("，相对湿度百分之")
             append(formatNumber(it))
-            append("百分比")
         }
         windSpeed?.let {
             append("，风速每小时")

@@ -27,6 +27,7 @@ import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.animateColorAsState
@@ -204,6 +205,8 @@ import com.neko.weather.data.ApiUsageTracker
 import com.neko.weather.data.ApiQuota
 import com.neko.weather.data.ApiUsageInterceptor
 import com.neko.weather.data.BackupCategories
+import com.neko.weather.BuildConfig
+import com.neko.weather.notification.WeatherNotificationPublisher
 import com.neko.weather.ui.settings.ActionEmphasis
 import com.neko.weather.ui.settings.ChoiceOption
 import com.neko.weather.ui.settings.SettingsPanel
@@ -1377,20 +1380,39 @@ private fun DailyForecastRow(day: DailyForecast, today: LocalDate) {
         Modifier.fillMaxWidth().alpha(if (isYesterday) 0.48f else 1f).padding(vertical = 9.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(dayLabel(day.date), color = Color.White, modifier = Modifier.width(76.dp))
+        Text(
+            dayLabel(day.date),
+            color = Color.White,
+            fontSize = 14.sp,
+            maxLines = 1,
+            softWrap = false,
+            // 窄屏下「10/28 周三」这类 4 位日期 + 星期需要更宽的固定槽位，否则星期会换行
+            modifier = Modifier.width(88.dp),
+        )
         Icon(
             weatherIcon(day.condition),
             day.condition,
             tint = Color.White,
             modifier = Modifier.width(42.dp).size(23.dp),
         )
-        Text(day.condition, color = Color.White, fontSize = 13.sp, modifier = Modifier.weight(1f))
         Text(
-            day.precipitationProbability?.roundToInt()?.takeIf { it > 0 }?.let { "$it%" }.orEmpty(),
-            color = Color(0xFFD5ECFF),
-            fontSize = 12.sp,
-            modifier = Modifier.width(42.dp),
+            day.condition,
+            color = Color.White,
+            fontSize = 13.sp,
+            maxLines = 1,
+            softWrap = false,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f).padding(start = 2.dp, end = 4.dp),
         )
+        val precipitation = day.precipitationProbability?.roundToInt()?.takeIf { it > 0 }
+        if (precipitation != null) {
+            Text(
+                "$precipitation%",
+                color = Color(0xFFD5ECFF),
+                fontSize = 12.sp,
+                modifier = Modifier.width(42.dp),
+            )
+        }
         Text("${temperatureText(day.low)}  /  ${temperatureText(day.high)}", color = Color.White, fontWeight = FontWeight.Medium)
     }
 }
@@ -1660,19 +1682,56 @@ private fun AiAdviceCard(
             ((elapsed - startedAt) / AI_REVEAL_FADE_MS).coerceIn(0f, 1f)
         }
     }
+    // AnimatedVisibility 退出动画期间内容仍按最新状态重组：清空后 advice 即为 null，
+    // 正文会瞬间变空导致折叠的是一块空白。保留最后一份非空文本让退出动画完整折叠。
+    var retainedAdvice by remember { mutableStateOf("") }
+    SideEffect { if (advice != null) retainedAdvice = advice }
+    val displayCharacters = if (advice != null) visibleCharacters else retainedAdvice.length
     SectionCard("AI 天气建议") {
-        when {
-            advice != null && expanded -> MarkdownText(advice.take(visibleCharacters), trailingAlphas)
-            advice != null -> Text("建议内容已折叠", color = Color.White.copy(alpha = .65f), fontSize = 12.sp)
-            configured -> Text("基于当前天气、逐小时预报、空气质量和预警生成个性化建议。", color = Color.White.copy(alpha = .75f), fontSize = 12.sp)
-            else -> Text("请先在设置中配置 Anthropic 兼容 API。", color = Color.White.copy(alpha = .75f), fontSize = 12.sp)
+        // 建议体整体的出现/清空与内部折叠/展开使用同一组 15 日式动画规格：
+        // 按清空时整块收缩消失，初始提示文案以相同节奏淡入回到初始状态
+        AnimatedVisibility(
+            visible = advice != null,
+            enter = expandVertically(animationSpec = tween(320)) + fadeIn(tween(260)),
+            exit = shrinkVertically(animationSpec = tween(280)) + fadeOut(tween(180)),
+        ) {
+            Column {
+                AnimatedVisibility(
+                    visible = expanded,
+                    enter = expandVertically(animationSpec = tween(320)) + fadeIn(tween(260)),
+                    exit = shrinkVertically(animationSpec = tween(280)) + fadeOut(tween(180)),
+                ) {
+                    MarkdownText(retainedAdvice.take(displayCharacters), trailingAlphas)
+                }
+                AnimatedVisibility(
+                    visible = !expanded,
+                    enter = expandVertically(animationSpec = tween(320)) + fadeIn(tween(260)),
+                    exit = shrinkVertically(animationSpec = tween(280)) + fadeOut(tween(180)),
+                ) {
+                    Text("建议内容已折叠", color = Color.White.copy(alpha = .65f), fontSize = 12.sp)
+                }
+            }
+        }
+        AnimatedVisibility(
+            visible = advice == null && configured,
+            enter = expandVertically(animationSpec = tween(320)) + fadeIn(tween(260)),
+            exit = shrinkVertically(animationSpec = tween(280)) + fadeOut(tween(180)),
+        ) {
+            Text("基于当前天气、逐小时预报、空气质量和预警生成个性化建议。", color = Color.White.copy(alpha = .75f), fontSize = 12.sp)
+        }
+        AnimatedVisibility(
+            visible = advice == null && !configured,
+            enter = expandVertically(animationSpec = tween(320)) + fadeIn(tween(260)),
+            exit = shrinkVertically(animationSpec = tween(280)) + fadeOut(tween(180)),
+        ) {
+            Text("请先在设置中配置 Anthropic 兼容 API。", color = Color.White.copy(alpha = .75f), fontSize = 12.sp)
         }
         Spacer(Modifier.height(10.dp))
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Button(
                 onClick = onRequest,
                 enabled = configured && !loading,
-                colors = ButtonDefaults.buttonColors(containerColor = Color.White.copy(alpha = .18f)),
+                colors = ButtonDefaults.buttonColors(containerColor = Color.White.copy(alpha = 0.18f)),
             ) {
                 if (loading) {
                     CircularProgressIndicator(Modifier.size(17.dp), color = Color.White, strokeWidth = 2.dp)
@@ -1683,7 +1742,7 @@ private fun AiAdviceCard(
             Spacer(Modifier.weight(1f))
             if (advice != null) {
                 TextButton(onClick = { expanded = !expanded }) { Text(if (expanded) "折叠" else "展开", color = Color.White) }
-                TextButton(onClick = onClear) { Text("清空", color = Color.White.copy(alpha = .8f)) }
+                TextButton(onClick = onClear) { Text("清空", color = Color.White.copy(alpha = 0.8f)) }
             }
         }
         Text("AI 内容仅供参考；请求可能产生 API 费用。", color = Color.White.copy(alpha = .52f), fontSize = 10.sp)
@@ -1691,7 +1750,19 @@ private fun AiAdviceCard(
 }
 
 @Composable
-internal fun MarkdownText(markdown: String, trailingAlphas: List<Float> = emptyList()) {
+internal fun MarkdownText(markdown: String, trailingAlphas: List<Float> = emptyList(), themeColors: Boolean = false) {
+    // themeColors=false 面向主页深色玻璃卡片；true 时（如法务文档弹窗）跟随 MaterialTheme
+    val scheme = MaterialTheme.colorScheme
+    val headingColor = if (themeColors) scheme.onSurface else Color.White
+    val bodyColor = if (themeColors) scheme.onSurface else Color.White.copy(alpha = .9f)
+    val quoteColor = if (themeColors) scheme.onSurfaceVariant else Color.White.copy(alpha = .72f)
+    val codeColor = if (themeColors) scheme.onSurface else Color(0xFFE8F1FF)
+    val codeBackground = if (themeColors) scheme.surfaceVariant else Color.Black.copy(alpha = .2f)
+    val markerColor = if (themeColors) scheme.primary else Color(0xFFFFD36B)
+    val dividerColor = if (themeColors) scheme.outlineVariant else Color.White.copy(alpha = .28f)
+    val quoteBarColor = if (themeColors) scheme.outlineVariant else Color.White.copy(alpha = .35f)
+    val linkColor = if (themeColors) scheme.primary else Color(0xFFB9DCFF)
+    val inlineCodeBackground = if (themeColors) scheme.surfaceVariant else Color.Black.copy(alpha = .24f)
     Column(Modifier.fillMaxWidth()) {
         val lines = markdown.lines()
         var inCodeBlock = false
@@ -1707,54 +1778,54 @@ internal fun MarkdownText(markdown: String, trailingAlphas: List<Float> = emptyL
         }
         when {
             inCodeBlock -> Text(
-                inlineMarkdown(rawLine, fade),
-                color = Color(0xFFE8F1FF),
+                inlineMarkdown(rawLine, fade, linkColor, inlineCodeBackground),
+                color = codeColor,
                 fontFamily = FontFamily.Monospace,
                 fontSize = 12.sp,
-                modifier = Modifier.fillMaxWidth().background(Color.Black.copy(alpha = .2f), RoundedCornerShape(4.dp)).padding(horizontal = 8.dp, vertical = 3.dp),
+                modifier = Modifier.fillMaxWidth().background(codeBackground, RoundedCornerShape(4.dp)).padding(horizontal = 8.dp, vertical = 3.dp),
             )
             rawLine.isBlank() -> Spacer(Modifier.height(5.dp))
             index + 1 < lines.size && lines[index + 1].trim().matches(Regex("=+")) -> {
-                Text(inlineMarkdown(rawLine, fade), color = Color.White, fontWeight = FontWeight.Bold, fontSize = 20.sp)
+                Text(inlineMarkdown(rawLine, fade, linkColor, inlineCodeBackground), color = headingColor, fontWeight = FontWeight.Bold, fontSize = 20.sp)
                 index++
             }
             index + 1 < lines.size && lines[index + 1].trim().matches(Regex("-+")) -> {
-                Text(inlineMarkdown(rawLine, fade), color = Color.White, fontWeight = FontWeight.Bold, fontSize = 18.sp)
+                Text(inlineMarkdown(rawLine, fade, linkColor, inlineCodeBackground), color = headingColor, fontWeight = FontWeight.Bold, fontSize = 18.sp)
                 index++
             }
             markdownHeading(rawLine) != null -> {
                 val (level, content) = markdownHeading(rawLine)!!
                 Text(
-                    inlineMarkdown(content, fade),
-                    color = Color.White,
+                    inlineMarkdown(content, fade, linkColor, inlineCodeBackground),
+                    color = headingColor,
                     fontWeight = FontWeight.Bold,
                     fontSize = when (level) { 1 -> 20.sp; 2 -> 18.sp; 3 -> 16.sp; 4 -> 15.sp; 5 -> 14.sp; else -> 13.sp },
                     modifier = Modifier.padding(top = if (level <= 2) 5.dp else 2.dp, bottom = 2.dp),
                 )
             }
-            isMarkdownDivider(trimmed) -> HorizontalDivider(color = Color.White.copy(alpha = .28f), modifier = Modifier.padding(vertical = 7.dp))
-            isMarkdownTableDivider(trimmed) -> HorizontalDivider(color = Color.White.copy(alpha = .22f), modifier = Modifier.padding(vertical = 2.dp))
-            trimmed.startsWith("|") && trimmed.endsWith("|") -> MarkdownTableRow(trimmed, fade)
+            isMarkdownDivider(trimmed) -> HorizontalDivider(color = dividerColor, modifier = Modifier.padding(vertical = 7.dp))
+            isMarkdownTableDivider(trimmed) -> HorizontalDivider(color = dividerColor.copy(alpha = .8f), modifier = Modifier.padding(vertical = 2.dp))
+            trimmed.startsWith("|") && trimmed.endsWith("|") -> MarkdownTableRow(trimmed, fade, bodyColor, linkColor, inlineCodeBackground)
             Regex("^\\s*[-*+]\\s+.*").matches(rawLine) -> Row(Modifier.padding(start = (rawLine.length - rawLine.trimStart().length).dp.coerceAtMost(24.dp), top = 2.dp, bottom = 2.dp)) {
                 val content = rawLine.trimStart().drop(2)
                 val task = Regex("^\\[([ xX])]\\s+(.*)").find(content)
-                Text(if (task == null) "•  " else if (task.groupValues[1].isBlank()) "☐  " else "☑  ", color = Color(0xFFFFD36B), fontWeight = FontWeight.Bold)
-                Text(inlineMarkdown(task?.groupValues?.get(2) ?: content, fade), color = Color.White.copy(alpha = .9f), lineHeight = 21.sp, modifier = Modifier.weight(1f))
+                Text(if (task == null) "•  " else if (task.groupValues[1].isBlank()) "☐  " else "☑  ", color = markerColor, fontWeight = FontWeight.Bold)
+                Text(inlineMarkdown(task?.groupValues?.get(2) ?: content, fade, linkColor, inlineCodeBackground), color = bodyColor, lineHeight = 21.sp, modifier = Modifier.weight(1f))
             }
             rawLine.trimStart().matches(Regex("\\d+[.)] .*")) -> {
                 val split = rawLine.trimStart().indexOf(' ')
                 Row(Modifier.padding(vertical = 2.dp)) {
-                    Text(rawLine.trimStart().take(split + 1), color = Color(0xFFFFD36B), fontWeight = FontWeight.Bold)
+                    Text(rawLine.trimStart().take(split + 1), color = markerColor, fontWeight = FontWeight.Bold)
                     Spacer(Modifier.width(6.dp))
-                    Text(inlineMarkdown(rawLine.trimStart().drop(split + 1), fade), color = Color.White.copy(alpha = .9f), lineHeight = 21.sp, modifier = Modifier.weight(1f))
+                    Text(inlineMarkdown(rawLine.trimStart().drop(split + 1), fade, linkColor, inlineCodeBackground), color = bodyColor, lineHeight = 21.sp, modifier = Modifier.weight(1f))
                 }
             }
             rawLine.trimStart().startsWith(">") -> Row(Modifier.padding(vertical = 2.dp)) {
-                Box(Modifier.width(3.dp).height(21.dp).background(Color.White.copy(alpha = .35f), RoundedCornerShape(2.dp)))
+                Box(Modifier.width(3.dp).height(21.dp).background(quoteBarColor, RoundedCornerShape(2.dp)))
                 Spacer(Modifier.width(8.dp))
-                Text(inlineMarkdown(rawLine.trimStart().removePrefix(">").trimStart(), fade), color = Color.White.copy(alpha = .72f), fontStyle = FontStyle.Italic, modifier = Modifier.weight(1f))
+                Text(inlineMarkdown(rawLine.trimStart().removePrefix(">").trimStart(), fade, linkColor, inlineCodeBackground), color = quoteColor, fontStyle = FontStyle.Italic, modifier = Modifier.weight(1f))
             }
-            else -> Text(inlineMarkdown(rawLine, fade), color = Color.White.copy(alpha = .9f), lineHeight = 21.sp)
+            else -> Text(inlineMarkdown(rawLine, fade, linkColor, inlineCodeBackground), color = bodyColor, lineHeight = 21.sp)
         }
             index++
         }
@@ -1775,18 +1846,29 @@ private fun isMarkdownTableDivider(line: String): Boolean =
     line.contains('|') && line.trim('|', ' ').split('|').all { it.trim().matches(Regex(":?-{3,}:?")) }
 
 @Composable
-private fun MarkdownTableRow(line: String, trailingAlphas: List<Float>) {
+private fun MarkdownTableRow(
+    line: String,
+    trailingAlphas: List<Float>,
+    bodyColor: Color,
+    linkColor: Color,
+    codeBackground: Color,
+) {
     Row(Modifier.fillMaxWidth().padding(vertical = 3.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
         val cells = line.trim('|').split('|')
         cells.forEachIndexed { cellIndex, cell ->
             // 只有最后一格可能处在逐字浮现的尾部，其余格子保持不透明
             val cellAlphas = if (cellIndex == cells.lastIndex) trailingAlphas else emptyList()
-            Text(inlineMarkdown(cell.trim(), cellAlphas), color = Color.White.copy(alpha = .88f), fontSize = 12.sp, modifier = Modifier.weight(1f))
+            Text(inlineMarkdown(cell.trim(), cellAlphas, linkColor, codeBackground), color = bodyColor.copy(alpha = .88f), fontSize = 12.sp, modifier = Modifier.weight(1f))
         }
     }
 }
 
-internal fun inlineMarkdown(source: String, trailingAlphas: List<Float> = emptyList()) = buildAnnotatedString {
+internal fun inlineMarkdown(
+    source: String,
+    trailingAlphas: List<Float> = emptyList(),
+    linkColor: Color = Color(0xFFB9DCFF),
+    codeBackground: Color = Color.Black.copy(alpha = .24f),
+) = buildAnnotatedString {
     var index = 0
     while (index < source.length) {
         when {
@@ -1807,7 +1889,7 @@ internal fun inlineMarkdown(source: String, trailingAlphas: List<Float> = emptyL
             source[index] == '`' -> {
                 val end = source.indexOf('`', index + 1)
                 if (end > index) {
-                    pushStyle(SpanStyle(fontFamily = FontFamily.Monospace, background = Color.Black.copy(alpha = .24f))); append(source.substring(index + 1, end)); pop(); index = end + 1
+                    pushStyle(SpanStyle(fontFamily = FontFamily.Monospace, background = codeBackground)); append(source.substring(index + 1, end)); pop(); index = end + 1
                 } else { append(source[index]); index++ }
             }
             source[index] == '*' || source[index] == '_' -> {
@@ -1823,7 +1905,7 @@ internal fun inlineMarkdown(source: String, trailingAlphas: List<Float> = emptyL
                 val urlEnd = if (urlStart >= 0) source.indexOf(')', urlStart) else -1
                 if (urlEnd > urlStart) {
                     val start = length
-                    pushStyle(SpanStyle(color = Color(0xFFB9DCFF), textDecoration = TextDecoration.Underline)); append(source.substring(index + 1, labelEnd)); pop()
+                    pushStyle(SpanStyle(color = linkColor, textDecoration = TextDecoration.Underline)); append(source.substring(index + 1, labelEnd)); pop()
                     addStringAnnotation("URL", source.substring(urlStart, urlEnd), start, length)
                     index = urlEnd + 1
                 } else { append(source[index]); index++ }
@@ -1838,7 +1920,7 @@ internal fun inlineMarkdown(source: String, trailingAlphas: List<Float> = emptyL
                 if (end > index && source.substring(index + 1, end).let { it.startsWith("http://") || it.startsWith("https://") }) {
                     val url = source.substring(index + 1, end)
                     val start = length
-                    pushStyle(SpanStyle(color = Color(0xFFB9DCFF), textDecoration = TextDecoration.Underline)); append(url); pop()
+                    pushStyle(SpanStyle(color = linkColor, textDecoration = TextDecoration.Underline)); append(url); pop()
                     addStringAnnotation("URL", url, start, length)
                     index = end + 1
                 } else { append(source[index]); index++ }
@@ -2165,7 +2247,9 @@ private fun composeAmapRadarMap(client: OkHttpClient, latitude: Double, longitud
     }
     val staticMapUrl = "https://restapi.amap.com/v3/staticmap".toHttpUrl().newBuilder()
         .addQueryParameter("location", "${converted[0]},${converted[1]}")
-        .addQueryParameter("zoom", RADAR_BASE_MAP_ZOOM.toString())
+        // 高德的 zoom 比标准 XYZ 瓦片小 1 级（高德 3 ≈ OSM 4），换算后底图范围才与
+        // RainViewer 雷达瓦片（512px = 同范围、以该点为中心）一致，否则云图整体错位
+        .addQueryParameter("zoom", (RADAR_BASE_MAP_ZOOM - 1).toString())
         .addQueryParameter("size", "512*512")
         .addQueryParameter("scale", "1")
         .addQueryParameter("traffic", "0")
@@ -2201,7 +2285,9 @@ private fun composeBaiduRadarMap(client: OkHttpClient, latitude: Double, longitu
         .addQueryParameter("coordtype", "wgs84ll")
         .addQueryParameter("width", "512")
         .addQueryParameter("height", "512")
-        .addQueryParameter("zoom", RADAR_BASE_MAP_ZOOM.toString())
+        // 百度的 zoom 比标准 XYZ 瓦片大 1 级（百度 19 ≈ OSM 18），换算后底图范围才与
+        // RainViewer 雷达瓦片一致
+        .addQueryParameter("zoom", (RADAR_BASE_MAP_ZOOM + 1).toString())
         .addQueryParameter("scale", "1")
         .build()
     val baseMap = client.newCall(Request.Builder().url(staticMapUrl).build()).execute().use { response ->
@@ -2662,6 +2748,15 @@ private fun NotificationSettingsPage(state: MainUiState, viewModel: MainViewMode
                 },
             )
         }
+        if (BuildConfig.DEBUG) {
+            Group("开发", "以下入口只出现在开发构建中") {
+                ActionRow(
+                    label = "推送测试通知",
+                    onClick = { WeatherNotificationPublisher.test(context) },
+                    hint = "立即发送一条测试通知，用于验证通知通道",
+                )
+            }
+        }
     }
 }
 
@@ -2772,7 +2867,7 @@ private fun AboutPage(state: MainUiState, viewModel: MainViewModel, modifier: Mo
                         .verticalScroll(documentScroll).padding(14.dp),
                 ) {
                     CompositionLocalProvider(LocalAppLanguage provides AppLanguage.SIMPLIFIED_CHINESE) {
-                        MarkdownText(document)
+                        MarkdownText(document, themeColors = true)
                     }
                 }
             },
@@ -3925,7 +4020,7 @@ private fun uvLabel(index: Double): String = when {
     else -> "极强"
 }
 
-private fun aqiLabel(aqi: Double, standard: String): String = if (standard == "EU") {
+internal fun aqiLabel(aqi: Double, standard: String): String = if (standard == "EU") {
     when {
         aqi <= 20 -> "优"
         aqi <= 40 -> "良"

@@ -35,7 +35,7 @@ class WeatherRepository(
         if (config.endpoint.contains("qweather.com") || config.displayName == "和风天气") {
             val dashboard = fetchQWeatherDashboard(config)
             val alertResult = alertRepository.fetch(config)
-            return@withContext dashboard.copy(
+            return@withContext withNowHourlySlot(dashboard).copy(
                 alerts = alertResult.alerts,
                 alertSource = alertResult.source,
                 alertsChecked = alertResult.checked,
@@ -71,13 +71,36 @@ class WeatherRepository(
                 WeatherDashboard(current = parseSnapshot(json, config))
             }
             val alertResult = alertRepository.fetch(config)
-            dashboard.copy(
+            withNowHourlySlot(dashboard).copy(
                 alerts = alertResult.alerts,
                 alertSource = alertResult.source,
                 alertsChecked = alertResult.checked,
                 alertStatusMessage = alertResult.message,
             )
         }
+    }
+
+    /**
+     * 逐小时条带的第一格固定显示「现在」，其真实时间标签会被吃掉。无论数据源自哪个
+     * 供应商，都用当前实况补一个「现在」槽，并去掉与当前小时重复的整点条目，
+     * 保证序列始终是：现在 → 下一小时 → 再下一小时。
+     */
+    private fun withNowHourlySlot(dashboard: WeatherDashboard): WeatherDashboard {
+        val hourly = dashboard.hourly
+        if (hourly.isEmpty()) return dashboard
+        val current = dashboard.current
+        val nowHour = current.observationTime.orEmpty().take(13)
+        val rest = hourly.filterNot { it.time.take(13) == nowHour && nowHour.isNotBlank() }
+        val nowEntry = HourlyForecast(
+            time = current.observationTime ?: hourly.first().time,
+            temperature = current.temperature,
+            condition = current.condition,
+            precipitationProbability = null,
+            precipitationAmount = null,
+            windSpeed = null,
+            windDirection = null,
+        )
+        return dashboard.copy(hourly = listOf(nowEntry) + rest)
     }
 
     private fun fetchQWeatherDashboard(config: WeatherApiConfig): WeatherDashboard {
@@ -210,9 +233,11 @@ class WeatherRepository(
         val hourlyJson = json.optJSONObject("hourly")
         val hourly = if (hourlyJson == null) emptyList() else {
             val times = hourlyJson.optJSONArray("time")
-            val currentTime = currentJson?.optString("time").orEmpty()
+            // 截断到整点再比较：current.time 带分钟（如 14:35）时逐字符串比较会跳过
+            // 当前整点小时，逐小时条带便从「现在」直接跳到两小时后。
+            val currentHour = currentJson?.optString("time").orEmpty().take(13)
             val start = (0 until (times?.length() ?: 0))
-                .firstOrNull { times?.optString(it).orEmpty() >= currentTime }
+                .firstOrNull { times?.optString(it).orEmpty().take(13) >= currentHour }
                 ?: 0
             (start until minOf(start + 24, times?.length() ?: 0)).mapNotNull { index ->
                 val temperature = hourlyJson.arrayNumber("temperature_2m", index) ?: return@mapNotNull null

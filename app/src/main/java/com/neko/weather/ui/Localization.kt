@@ -19,6 +19,20 @@ private fun toEnglish(source: String): String {
 }
 
 private val ENGLISH_REPLACEMENTS = listOf(
+    "未检测到系统 TTS 引擎，请在系统设置的语言和输入中启用文字转语音输出" to "No system TTS engine found. Enable text-to-speech output under system language & input settings",
+    "当前 TTS 引擎缺少中文语音数据，请在系统设置的文字转语音输出中安装中文语音包" to "The current TTS engine lacks Chinese voice data. Install the Chinese voice pack from text-to-speech settings",
+    "语音播报失败，请检查 TTS 引擎与媒体音量" to "Speech failed. Check the TTS engine and media volume.",
+    "TTS 播报失败" to "TTS playback failed",
+    "TTS 播报出错（错误码 " to "TTS playback error (code ",
+    "（" to "(",
+    "）" to ")",
+    "推送测试通知" to "Send test notification",
+    "立即发送一条测试通知，用于验证通知通道" to "Posts one notification immediately to verify the channel",
+    "开发" to "Developer",
+    "以下入口只出现在开发构建中" to "These entries only appear in debug builds",
+    "通知测试" to "Notification test",
+    "看到这条通知，说明通知通道工作正常。" to "If you can see this notification, the channel is working.",
+    "系统语音播报失败，请在系统设置中检查 TTS 引擎与中文语音数据" to "TTS playback failed. Check the system TTS engine and Chinese voice data in system settings.",
     "Live2D 模型" to "Live2D models",
     "导入、切换与调整 Live2D 角色" to "Import, switch and adjust Live2D characters",
     "搜索时区" to "Search time zones",
@@ -667,6 +681,18 @@ private fun toJapanese(source: String): String {
 }
 
 private val JAPANESE_REPLACEMENTS = listOf(
+    "未检测到系统 TTS 引擎，请在系统设置的语言和输入中启用文字转语音输出" to "システムの TTS エンジンが見つかりません。設定の言語と入力でテキスト読み上げを有効にしてください",
+    "当前 TTS 引擎缺少中文语音数据，请在系统设置的文字转语音输出中安装中文语音包" to "現在の TTS エンジンには中国語音声データがありません。設定のテキスト読み上げから中国語音声をインストールしてください",
+    "语音播报失败，请检查 TTS 引擎与媒体音量" to "読み上げに失敗しました。TTS エンジンとメディア音量を確認してください",
+    "TTS 播报失败" to "TTS の読み上げに失敗しました",
+    "TTS 播报出错（错误码 " to "TTS 読み上げエラー（コード ",
+    "推送测试通知" to "テスト通知を送信",
+    "立即发送一条测试通知，用于验证通知通道" to "通知チャネルを確認するため、すぐに通知を 1 件送信します",
+    "开发" to "開発",
+    "以下入口只出现在开发构建中" to "以下の項目は開発ビルドのみに表示されます",
+    "通知测试" to "通知テスト",
+    "看到这条通知，说明通知通道工作正常。" to "この通知が見えれば、通知チャネルは正常に動作しています。",
+    "系统语音播报失败，请在系统设置中检查 TTS 引擎与中文语音数据" to "音声読み上げに失敗しました。システム設定で TTS エンジンと中国語音声データを確認してください。",
     "Live2D 模型" to "Live2D モデル",
     "导入、切换与调整 Live2D 角色" to "Live2D モデルの導入・切り替え・調整",
     "搜索时区" to "タイムゾーンを検索",
