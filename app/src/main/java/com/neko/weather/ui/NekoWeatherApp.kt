@@ -808,6 +808,11 @@ private fun DashboardContent(
         )
     }
     val cityKey = "${config.latitude},${config.longitude}"
+    // AnimatedContent 两侧内容必须按 targetState 取值，否则过渡期间新旧两侧读到的
+    // 都是同一份最新天气，滑动动画变成相同内容的平移。按城市缓存快照，让旧一侧
+    // 保持切换前城市的天气。
+    val heroSnapshots = remember { mutableMapOf<String, WeatherDashboard>() }
+    heroSnapshots[cityKey] = weather
     AnimatedContent(
         targetState = cityKey,
         transitionSpec = {
@@ -817,8 +822,8 @@ private fun DashboardContent(
         },
         label = "homeCitySwipe",
         modifier = Modifier.fillMaxWidth(),
-    ) {
-        CurrentHero(weather, customization, onToggleLive2d, forceStaticLive2d, swipeModifier)
+    ) { key ->
+        CurrentHero(heroSnapshots[key] ?: weather, customization, onToggleLive2d, forceStaticLive2d, swipeModifier)
     }
     if (homeCities.size > 1) {
         val latitude = config.latitude.toDoubleOrNull()
@@ -2488,8 +2493,9 @@ private fun ImageCropDialog(
     onConfirm: (Bitmap) -> Unit,
 ) {
     val context = LocalContext.current
-    val source by produceState<Bitmap?>(null, pending.uri) {
-        value = withContext(Dispatchers.IO) { decodeEditableBitmap(context, pending.uri) }
+    var source by remember(pending.uri) { mutableStateOf<Bitmap?>(null) }
+    LaunchedEffect(pending.uri) {
+        source = withContext(Dispatchers.IO) { decodeEditableBitmap(context, pending.uri) }
     }
     var zoom by remember(pending.uri) { mutableStateOf(1f) }
     var rotation by remember(pending.uri) { mutableStateOf(0f) }

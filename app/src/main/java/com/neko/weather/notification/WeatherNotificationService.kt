@@ -58,7 +58,6 @@ object WeatherNotificationScheduler {
     }
 
     fun createChannels(context: Context) {
-        if (Build.VERSION.SDK_INT < 26) return
         val manager = context.getSystemService(NotificationManager::class.java)
         val language = ConfigStore(context).loadDisplaySettings().language
         listOf(
