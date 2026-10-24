@@ -797,7 +797,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val text = buildString {
             append(current.location).append("当前").append(current.condition)
             append("，气温").append(spokenTemperature)
-            current.humidity?.let { append("，相对湿度").append(it.roundToInt()).append("百分比") }
+            current.humidity?.let { append("，相对湿度百分之").append(it.roundToInt()) }
             current.windSpeed?.let { append("，风速每小时").append(it.roundToInt()).append("公里") }
             append("。")
         }
