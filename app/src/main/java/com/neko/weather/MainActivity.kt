@@ -2,6 +2,7 @@ package com.neko.weather
 
 import android.os.Bundle
 import android.os.Build
+import android.view.Display
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -29,17 +30,16 @@ class MainActivity : ComponentActivity() {
         preferHighestRefreshRate()
     }
 
-    @Suppress("DEPRECATION")
     private fun preferHighestRefreshRate() {
-        val targetRate = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            display?.supportedModes?.maxOfOrNull { it.refreshRate }
-        } else {
-            display?.supportedRefreshRates?.maxOrNull()
-        } ?: return
+        val targetRate = currentDisplay()?.supportedModes?.maxOfOrNull { it.refreshRate } ?: return
 
         window.attributes = window.attributes.apply {
             preferredRefreshRate = targetRate
         }
-
     }
+
+    /** Context.getDisplay 需要 API 30；更早版本回退到 windowManager.defaultDisplay。 */
+    private fun currentDisplay(): Display? =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) display
+        else @Suppress("DEPRECATION") windowManager.defaultDisplay
 }
