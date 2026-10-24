@@ -19,13 +19,21 @@ android {
         applicationId = "com.neko.weather"
         minSdk = 26
         targetSdk = 35
-        versionCode = 100
-        versionName = "1.0.0"
+        versionCode = 110
+        versionName = "1.1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
-        ndk {
-            abiFilters += setOf("arm64-v8a", "x86", "x86_64")
+    }
+
+    // 按架构拆分 release 产物（arm64-v8a / x86 / x86_64 + 全架构通用包），
+    // 同时输出单架构小体积 APK；minSdk 26 统一覆盖 Android 8.0+，无按系统版本拆分的必要
+    splits {
+        abi {
+            isEnable = true
+            reset()
+            include("arm64-v8a", "x86", "x86_64")
+            isUniversalApk = true
         }
     }
 
