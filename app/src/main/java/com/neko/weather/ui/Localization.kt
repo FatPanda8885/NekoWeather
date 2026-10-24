@@ -19,6 +19,14 @@ private fun toEnglish(source: String): String {
 }
 
 private val ENGLISH_REPLACEMENTS = listOf(
+    "搜索时区" to "Search time zones",
+    "当前时区：" to "Current time zone: ",
+    "跟随系统时区（" to "Follow system time zone (",
+    "跟随系统（" to "Follow system (",
+    "获取定位" to "Use my location",
+    "定位中" to "Locating",
+    "定位获取失败" to "Unable to get your location",
+    "时区匹配失败" to "Unable to match a time zone",
     "使用定位选择时区" to "Pick time zone by location",
     "正在定位…" to "Locating…",
     "已定位：" to "Located: ",
@@ -657,6 +665,14 @@ private fun toJapanese(source: String): String {
 }
 
 private val JAPANESE_REPLACEMENTS = listOf(
+    "搜索时区" to "タイムゾーンを検索",
+    "当前时区：" to "現在のタイムゾーン：",
+    "跟随系统时区（" to "システムのタイムゾーンに従う（",
+    "跟随系统（" to "システムに従う（",
+    "获取定位" to "現在地を取得",
+    "定位中" to "測位中",
+    "定位获取失败" to "位置情報の取得に失敗しました",
+    "时区匹配失败" to "タイムゾーンを特定できません",
     "使用定位选择时区" to "現在地からタイムゾーンを選択",
     "正在定位…" to "測位中…",
     "已定位：" to "測位結果：",

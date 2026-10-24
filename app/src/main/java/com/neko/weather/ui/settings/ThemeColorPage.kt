@@ -138,11 +138,13 @@ private fun ThemeModeSelectPanel(
         ThemeMode.entries.forEach { mode ->
             val selected = currentMode == mode
             Column(
-                modifier = Modifier.selectable(
-                    selected = selected,
-                    role = Role.RadioButton,
-                    onClick = { onModeSelected(mode) },
-                ),
+                modifier = Modifier
+                    .clip(RoundedCornerShape(16.dp))
+                    .selectable(
+                        selected = selected,
+                        role = Role.RadioButton,
+                        onClick = { onModeSelected(mode) },
+                    ),
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
                 if (mode == ThemeMode.AUTO) {
