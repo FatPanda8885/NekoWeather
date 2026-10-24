@@ -804,7 +804,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (!systemTts.speak(text, _state.value.voiceSettings)) {
             val failureMessage = when {
                 systemTts.isEngineMissing() -> "未检测到系统 TTS 引擎，请在系统设置的语言和输入中启用文字转语音输出"
-                systemTts.isChineseVoiceMissing() -> "当前 TTS 引擎缺少中文语音数据，请在系统设置的文字转语音输出中安装中文语音包"
                 else -> "语音播报失败，请检查 TTS 引擎与媒体音量"
             }
             _state.update { it.copy(message = failureMessage) }

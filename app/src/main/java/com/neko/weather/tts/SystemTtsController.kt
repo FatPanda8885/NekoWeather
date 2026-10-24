@@ -18,8 +18,6 @@ class SystemTtsController(context: Context) {
     /** 所有绑定尝试（含默认引擎的 null）都失败时为 true。 */
     private var engineMissing = false
 
-    /** 引擎初始化成功但缺少中文语音数据时为 true，此时播报会静默失败。 */
-    private var chineseVoiceMissing = false
     private var pending: Pair<String, VoiceSettings>? = null
     private var tts: TextToSpeech? = null
     private val attemptedEngines = mutableSetOf<String?>()
@@ -63,12 +61,7 @@ class SystemTtsController(context: Context) {
         if (status == TextToSpeech.SUCCESS) {
             ready = true
             val engine = tts ?: return
-            val languageResult = engine.setLanguage(Locale.SIMPLIFIED_CHINESE)
-            chineseVoiceMissing = languageResult == TextToSpeech.LANG_MISSING_DATA ||
-                languageResult == TextToSpeech.LANG_NOT_SUPPORTED
-            if (chineseVoiceMissing) {
-                engine.language = Locale.getDefault()
-            }
+            chooseChineseLanguage(engine)
             engine.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
                 override fun onStart(utteranceId: String?) = CubismSignals.setSpeaking(true)
                 override fun onDone(utteranceId: String?) = CubismSignals.setSpeaking(false)
@@ -106,13 +99,38 @@ class SystemTtsController(context: Context) {
         }
     }
 
+    /**
+     * 选择中文语言。逐个尝试 zh 系列 locale，取第一个引擎明确支持的；若全部上报
+     * 「缺失/不支持」，仍设置简体中文继续播报——部分 OEM 引擎的语言查询元数据不准，
+     * 实际可以合成中文，真实失败会通过 utterance onError 回调上报。
+     */
+    private fun chooseChineseLanguage(engine: TextToSpeech) {
+        val candidates = listOf(
+            Locale.SIMPLIFIED_CHINESE,
+            Locale.CHINA,
+            Locale.forLanguageTag("zh-Hans"),
+            Locale.CHINESE,
+            Locale.TRADITIONAL_CHINESE,
+        )
+        for (candidate in candidates) {
+            val result = engine.setLanguage(candidate)
+            if (result != TextToSpeech.LANG_MISSING_DATA && result != TextToSpeech.LANG_NOT_SUPPORTED) {
+                if (candidate != Locale.SIMPLIFIED_CHINESE) {
+                    Log.i("NekoWeather", "TTS language set to $candidate (result $result)")
+                }
+                return
+            }
+        }
+        Log.w("NekoWeather", "TTS engine reports no zh locale; speaking with zh_CN anyway")
+        engine.setLanguage(Locale.SIMPLIFIED_CHINESE)
+    }
+
     fun speak(text: String, settings: VoiceSettings): Boolean {
         if (engineMissing) return false
         if (!ready) {
             pending = text to settings
             return true
         }
-        if (chineseVoiceMissing) return false
         val engine = tts ?: return false
         if (engine.setSpeechRate(settings.rate) == TextToSpeech.ERROR) return false
         if (engine.setPitch(settings.pitch) == TextToSpeech.ERROR) return false
@@ -126,8 +144,6 @@ class SystemTtsController(context: Context) {
     }
 
     fun isEngineMissing(): Boolean = engineMissing
-
-    fun isChineseVoiceMissing(): Boolean = chineseVoiceMissing
 
     fun stop() {
         CubismSignals.setSpeaking(false)
