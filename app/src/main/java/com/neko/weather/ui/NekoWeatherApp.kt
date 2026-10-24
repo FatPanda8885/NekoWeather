@@ -27,6 +27,7 @@ import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.animateColorAsState
@@ -1661,15 +1662,28 @@ private fun AiAdviceCard(
     onClear: () -> Unit,
 ) {
     var expanded by rememberSaveable { mutableStateOf(true) }
+    // 灰飞烟灭：按下清空后正文从开头逐字消散并整体轻微上飘，动画结束后才真正清空
+    var dissolving by rememberSaveable { mutableStateOf(false) }
+    val dissolve = remember { Animatable(0f) }
     // 所有字符的透明度都由这一个「已流逝毫秒」时钟推导：每字错峰 AI_REVEAL_STAGGER_MS 启动、
     // 各自用 AI_REVEAL_FADE_MS 淡入，于是任一时刻约有 AI_REVEAL_FADE_CHARS 个字同时在渐变。
     val revealElapsed = remember(advice) { Animatable(0f) }
     LaunchedEffect(advice) {
         expanded = true
+        dissolve.snapTo(0f)
+        dissolving = false
         revealElapsed.snapTo(0f)
         val text = advice ?: return@LaunchedEffect
         val total = (text.length - 1).coerceAtLeast(0) * AI_REVEAL_STAGGER_MS + AI_REVEAL_FADE_MS
         revealElapsed.animateTo(total, tween(total.toInt().coerceAtLeast(1), easing = LinearEasing))
+    }
+    LaunchedEffect(dissolving) {
+        if (!dissolving) return@LaunchedEffect
+        dissolve.snapTo(0f)
+        dissolve.animateTo(1f, tween(1200, easing = FastOutSlowInEasing))
+        onClear()
+        dissolving = false
+        dissolve.snapTo(0f)
     }
     val elapsed = revealElapsed.value
     val visibleCharacters = advice?.let { text ->
@@ -1683,8 +1697,24 @@ private fun AiAdviceCard(
     }
     SectionCard("AI 天气建议") {
         when {
-            advice != null && expanded -> MarkdownText(advice.take(visibleCharacters), trailingAlphas)
-            advice != null -> Text("建议内容已折叠", color = Color.White.copy(alpha = .65f), fontSize = 12.sp)
+            advice != null -> {
+                AnimatedVisibility(
+                    visible = expanded,
+                    enter = expandVertically(animationSpec = tween(320)) + fadeIn(tween(260)),
+                    exit = shrinkVertically(animationSpec = tween(280)) + fadeOut(tween(180)),
+                ) {
+                    Box(Modifier.graphicsLayer { translationY = -dissolve.value * 26f }) {
+                        MarkdownText(advice.take(visibleCharacters), trailingAlphas, dissolveProgress = dissolve.value)
+                    }
+                }
+                AnimatedVisibility(
+                    visible = !expanded,
+                    enter = expandVertically(animationSpec = tween(320)) + fadeIn(tween(260)),
+                    exit = shrinkVertically(animationSpec = tween(280)) + fadeOut(tween(180)),
+                ) {
+                    Text("建议内容已折叠", color = Color.White.copy(alpha = .65f), fontSize = 12.sp)
+                }
+            }
             configured -> Text("基于当前天气、逐小时预报、空气质量和预警生成个性化建议。", color = Color.White.copy(alpha = .75f), fontSize = 12.sp)
             else -> Text("请先在设置中配置 Anthropic 兼容 API。", color = Color.White.copy(alpha = .75f), fontSize = 12.sp)
         }
@@ -1692,8 +1722,8 @@ private fun AiAdviceCard(
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Button(
                 onClick = onRequest,
-                enabled = configured && !loading,
-                colors = ButtonDefaults.buttonColors(containerColor = Color.White.copy(alpha = .18f)),
+                enabled = configured && !loading && !dissolving,
+                colors = ButtonDefaults.buttonColors(containerColor = Color.White.copy(alpha = 0.18f)),
             ) {
                 if (loading) {
                     CircularProgressIndicator(Modifier.size(17.dp), color = Color.White, strokeWidth = 2.dp)
@@ -1703,8 +1733,14 @@ private fun AiAdviceCard(
             }
             Spacer(Modifier.weight(1f))
             if (advice != null) {
-                TextButton(onClick = { expanded = !expanded }) { Text(if (expanded) "折叠" else "展开", color = Color.White) }
-                TextButton(onClick = onClear) { Text("清空", color = Color.White.copy(alpha = .8f)) }
+                TextButton(onClick = { expanded = !expanded }, enabled = !dissolving) { Text(if (expanded) "折叠" else "展开", color = Color.White) }
+                TextButton(
+                    enabled = !dissolving && !loading,
+                    onClick = {
+                        // 折叠态下正文不可见，直接清空即可；展开态先播放灰飞烟灭
+                        if (expanded) dissolving = true else onClear()
+                    },
+                ) { Text("清空", color = Color.White.copy(alpha = 0.8f)) }
             }
         }
         Text("AI 内容仅供参考；请求可能产生 API 费用。", color = Color.White.copy(alpha = .52f), fontSize = 10.sp)
@@ -1712,7 +1748,12 @@ private fun AiAdviceCard(
 }
 
 @Composable
-internal fun MarkdownText(markdown: String, trailingAlphas: List<Float> = emptyList(), themeColors: Boolean = false) {
+internal fun MarkdownText(
+    markdown: String,
+    trailingAlphas: List<Float> = emptyList(),
+    themeColors: Boolean = false,
+    dissolveProgress: Float = 0f,
+) {
     // themeColors=false 面向主页深色玻璃卡片；true 时（如法务文档弹窗）跟随 MaterialTheme
     val scheme = MaterialTheme.colorScheme
     val headingColor = if (themeColors) scheme.onSurface else Color.White
@@ -1727,12 +1768,25 @@ internal fun MarkdownText(markdown: String, trailingAlphas: List<Float> = emptyL
     val inlineCodeBackground = if (themeColors) scheme.surfaceVariant else Color.Black.copy(alpha = .24f)
     Column(Modifier.fillMaxWidth()) {
         val lines = markdown.lines()
+        // 灰飞烟灭：以全文长度为进度基准，字符按文档顺序先后进入消散窗口，
+        // 窗口同时覆盖约 22% 的字符，形成从开头连续烧到结尾的效果
+        val dissolveTotal = markdown.length
+        val dissolveWindow = (dissolveTotal * 0.22f).coerceAtLeast(8f)
+        val dissolveFrontier = dissolveProgress * (dissolveTotal + dissolveWindow)
+        fun dissolveFade(base: Int, length: Int): List<Float> = List(length) { c ->
+            ((dissolveFrontier - (base + c)) / dissolveWindow).coerceIn(0f, 1f)
+        }.reversed()
         var inCodeBlock = false
         var index = 0
+        var charBase = 0
         while (index < lines.size) {
         val rawLine = lines[index]
         val trimmed = rawLine.trim()
-        val fade = if (index == lines.lastIndex) trailingAlphas else emptyList()
+        val fade = when {
+            dissolveProgress > 0f -> dissolveFade(charBase, rawLine.length)
+            index == lines.lastIndex -> trailingAlphas
+            else -> emptyList()
+        }
         if (trimmed.startsWith("```") || trimmed.startsWith("~~~")) {
             inCodeBlock = !inCodeBlock
             index++
@@ -1789,6 +1843,7 @@ internal fun MarkdownText(markdown: String, trailingAlphas: List<Float> = emptyL
             }
             else -> Text(inlineMarkdown(rawLine, fade, linkColor, inlineCodeBackground), color = bodyColor, lineHeight = 21.sp)
         }
+            charBase += rawLine.length
             index++
         }
     }
