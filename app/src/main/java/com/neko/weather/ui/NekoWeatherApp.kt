@@ -4020,7 +4020,7 @@ private fun uvLabel(index: Double): String = when {
     else -> "极强"
 }
 
-private fun aqiLabel(aqi: Double, standard: String): String = if (standard == "EU") {
+internal fun aqiLabel(aqi: Double, standard: String): String = if (standard == "EU") {
     when {
         aqi <= 20 -> "优"
         aqi <= 40 -> "良"
