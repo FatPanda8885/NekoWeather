@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
 import android.util.Log
+import androidx.annotation.RequiresApi
 import com.neko.weather.model.AppLanguage
 
 object LauncherLabelManager {
@@ -32,6 +33,7 @@ object LauncherLabelManager {
         }
     }
 
+    @RequiresApi(Build.VERSION_CODES.TIRAMISU)
     private fun setEnabledAtomically(
         packageManager: PackageManager,
         target: ComponentName,
