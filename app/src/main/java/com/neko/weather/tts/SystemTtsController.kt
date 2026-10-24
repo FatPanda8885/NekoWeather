@@ -1,42 +1,75 @@
 package com.neko.weather.tts
 
 import android.content.Context
+import android.content.Intent
+import android.provider.Settings
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import android.os.Bundle
+import android.util.Log
 import com.neko.weather.live2d.CubismSignals
 import com.neko.weather.model.VoiceSettings
 import java.util.Locale
 
 class SystemTtsController(context: Context) {
+    private val appContext = context.applicationContext
     private var ready = false
 
-    /** 设备上没有任何可用 TTS 引擎（init 回调失败）时为 true。 */
+    /** 所有绑定尝试（含默认引擎的 null）都失败时为 true。 */
     private var engineMissing = false
 
     /** 引擎初始化成功但缺少中文语音数据时为 true，此时播报会静默失败。 */
     private var chineseVoiceMissing = false
     private var pending: Pair<String, VoiceSettings>? = null
     private var tts: TextToSpeech? = null
+    private val attemptedEngines = mutableSetOf<String?>()
 
     /** 引擎侧播报出错时的回调；参数为系统错误码（可空）。可能在 binder 线程调用。 */
     var speakErrorHandler: ((Int?) -> Unit)? = null
 
     init {
-        tts = TextToSpeech(context.applicationContext) { status ->
-            if (status != TextToSpeech.SUCCESS) {
-                engineMissing = true
-                pending = null
-                return@TextToSpeech
-            }
+        createEngine(preferredEnginePackage())
+    }
+
+    /**
+     * 部分系统（如 ColorOS 16 / Android 16）上两参构造器对「默认引擎」的解析会直接
+     * 初始化失败，即使系统设置里 TTS 完全可用；显式指定引擎包名绑定更可靠。
+     */
+    private fun preferredEnginePackage(): String? {
+        val raw = Settings.Secure.getString(appContext.contentResolver, "tts_default_synth")
+        val fromSettings = raw?.substringBefore('/')?.takeIf(String::isNotBlank)
+        if (fromSettings != null) return fromSettings
+        return firstInstalledEngine()
+    }
+
+    private fun firstInstalledEngine(exclude: String? = null): String? =
+        appContext.packageManager.queryIntentServices(Intent(TextToSpeech.Engine.INTENT_ACTION_TTS_SERVICE), 0)
+            ?.asSequence()
+            ?.mapNotNull { it.serviceInfo?.packageName }
+            ?.filter { it != exclude }
+            ?.firstOrNull()
+
+    private fun createEngine(enginePackage: String?) {
+        attemptedEngines += enginePackage
+        val listener = TextToSpeech.OnInitListener { status -> handleInitResult(status, enginePackage) }
+        tts = if (enginePackage != null) {
+            TextToSpeech(appContext, listener, enginePackage)
+        } else {
+            TextToSpeech(appContext, listener)
+        }
+    }
+
+    private fun handleInitResult(status: Int, enginePackage: String?) {
+        if (status == TextToSpeech.SUCCESS) {
             ready = true
-            val languageResult = tts?.setLanguage(Locale.SIMPLIFIED_CHINESE)
+            val engine = tts ?: return
+            val languageResult = engine.setLanguage(Locale.SIMPLIFIED_CHINESE)
             chineseVoiceMissing = languageResult == TextToSpeech.LANG_MISSING_DATA ||
                 languageResult == TextToSpeech.LANG_NOT_SUPPORTED
             if (chineseVoiceMissing) {
-                tts?.language = Locale.getDefault()
+                engine.language = Locale.getDefault()
             }
-            tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
+            engine.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
                 override fun onStart(utteranceId: String?) = CubismSignals.setSpeaking(true)
                 override fun onDone(utteranceId: String?) = CubismSignals.setSpeaking(false)
                 @Deprecated("Deprecated in Java")
@@ -51,6 +84,24 @@ class SystemTtsController(context: Context) {
                 override fun onStop(utteranceId: String?, interrupted: Boolean) = CubismSignals.setSpeaking(false)
             })
             pending?.let { (text, settings) -> speak(text, settings) }
+            pending = null
+            return
+        }
+
+        // 绑定失败：销毁本次实例，换下一个候选引擎重试（默认解析 → 设置里的默认引擎 →
+        // 已安装的其他 TTS 服务），全部失败才判定为「未检测到引擎」
+        tts?.shutdown()
+        tts = null
+        val fallback = sequenceOf(
+            preferredEnginePackage(),
+            firstInstalledEngine(exclude = enginePackage),
+        ).firstOrNull { it !in attemptedEngines }
+        if (fallback != null) {
+            Log.w("NekoWeather", "TTS init failed for ${enginePackage ?: "default"}; retrying with $fallback")
+            createEngine(fallback)
+        } else {
+            Log.w("NekoWeather", "TTS init failed for ${enginePackage ?: "default"}; no usable engine left")
+            engineMissing = true
             pending = null
         }
     }
