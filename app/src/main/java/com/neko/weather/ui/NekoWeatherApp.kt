@@ -44,6 +44,7 @@ import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
@@ -265,11 +266,13 @@ private object SettingsPageId {
     const val PRESETS = 15
     const val PRESET_EDITOR = 16
     const val TIMEZONE = 17
-    val CHILD_PAGES = setOf(PROVIDERS, VOICE, ABOUT, APPEARANCE, AI, AI_EDITOR, NOTIFICATIONS, BACKUP, API_USAGE, DISPLAY_AND_REFRESH, THEME_COLOR, PRESETS, PRESET_EDITOR, TIMEZONE)
+    const val LIVE2D = 18
+    val CHILD_PAGES = setOf(PROVIDERS, VOICE, ABOUT, APPEARANCE, AI, AI_EDITOR, NOTIFICATIONS, BACKUP, API_USAGE, DISPLAY_AND_REFRESH, THEME_COLOR, PRESETS, PRESET_EDITOR, TIMEZONE, LIVE2D)
 }
 
 private fun parentPageOf(page: Int): Int = when (page) {
-    SettingsPageId.LIVE2D_EDITOR -> SettingsPageId.APPEARANCE
+    SettingsPageId.LIVE2D -> SettingsPageId.APPEARANCE
+    SettingsPageId.LIVE2D_EDITOR -> SettingsPageId.LIVE2D
     SettingsPageId.AI_EDITOR -> SettingsPageId.AI
     SettingsPageId.API_USAGE -> SettingsPageId.PROVIDERS
     SettingsPageId.THEME_COLOR -> SettingsPageId.APPEARANCE
@@ -441,6 +444,7 @@ fun NekoWeatherApp(viewModel: MainViewModel) {
                                             SettingsPageId.DISPLAY_AND_REFRESH -> "显示与更新"
                                             SettingsPageId.AI_EDITOR -> "AI 模型"
                                             SettingsPageId.THEME_COLOR -> "主题色彩"
+                                            SettingsPageId.LIVE2D -> "Live2D 模型"
                                             SettingsPageId.PRESETS -> "外观预设"
                                             SettingsPageId.PRESET_EDITOR -> "编辑预设"
                                             SettingsPageId.TIMEZONE -> "时区"
@@ -508,8 +512,14 @@ fun NekoWeatherApp(viewModel: MainViewModel) {
                             SettingsPageId.APPEARANCE -> AppearancePage(
                                 state = state,
                                 viewModel = viewModel,
-                                onOpenEditor = { page = SettingsPageId.LIVE2D_EDITOR },
+                                onOpenLive2d = { page = SettingsPageId.LIVE2D },
                                 onOpenThemeColor = { page = SettingsPageId.THEME_COLOR },
+                                modifier = Modifier.padding(padding),
+                            )
+                            SettingsPageId.LIVE2D -> Live2dPage(
+                                state = state,
+                                viewModel = viewModel,
+                                onOpenEditor = { page = SettingsPageId.LIVE2D_EDITOR },
                                 modifier = Modifier.padding(padding),
                             )
                             SettingsPageId.THEME_COLOR -> ThemeColorPage(
@@ -2904,7 +2914,7 @@ private fun renderCroppedBitmap(
 private fun AppearancePage(
     state: MainUiState,
     viewModel: MainViewModel,
-    onOpenEditor: () -> Unit,
+    onOpenLive2d: () -> Unit,
     onOpenThemeColor: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -2913,7 +2923,6 @@ private fun AppearancePage(
     val appIconPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         uri?.let { pendingImageEdit = PendingImageEdit(it, "appicon", "裁切桌面图标") }
     }
-    val live2dPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { it?.let(viewModel::importLive2d) }
     val languageLabel = when (state.displaySettings.language) {
         AppLanguage.SIMPLIFIED_CHINESE -> "简体中文"
         AppLanguage.TRADITIONAL_CHINESE -> "繁體中文"
@@ -2973,6 +2982,48 @@ private fun AppearancePage(
             }
         }
         Group("Live2D") {
+            Entry(
+                title = "Live2D 模型",
+                description = "导入、切换与调整 Live2D 角色",
+                showChevron = true,
+                onClick = onOpenLive2d,
+            )
+        }
+        Group("重置") {
+            TextButton(
+                onClick = viewModel::resetCustomization,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(30.dp),
+                shape = RoundedCornerShape(16.dp),
+                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 0.dp),
+            ) {
+                Text("恢复默认外观", fontSize = 13.sp)
+            }
+        }
+    }
+    pendingImageEdit?.let { pending ->
+        ImageCropDialog(
+            pending = pending,
+            onDismiss = { pendingImageEdit = null },
+            onConfirm = { bitmap ->
+                viewModel.importEditedImage(bitmap, pending.kind)
+                pendingImageEdit = null
+            },
+        )
+    }
+}
+
+@Composable
+private fun Live2dPage(
+    state: MainUiState,
+    viewModel: MainViewModel,
+    onOpenEditor: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val live2dPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { it?.let(viewModel::importLive2d) }
+    SettingsPanel(modifier) {
+        Group("Live2D") {
             NoteRow("实验性功能，可能会造成卡顿", isError = true)
             SwitchRow(
                 title = "启用 Live2D",
@@ -3010,23 +3061,6 @@ private fun AppearancePage(
                 )
             }
         }
-        Group("重置") {
-            ActionRow(
-                label = "恢复默认外观",
-                onClick = viewModel::resetCustomization,
-                emphasis = ActionEmphasis.TEXT,
-            )
-        }
-    }
-    pendingImageEdit?.let { pending ->
-        ImageCropDialog(
-            pending = pending,
-            onDismiss = { pendingImageEdit = null },
-            onConfirm = { bitmap ->
-                viewModel.importEditedImage(bitmap, pending.kind)
-                pendingImageEdit = null
-            },
-        )
     }
 }
 

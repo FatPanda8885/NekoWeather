@@ -19,6 +19,8 @@ private fun toEnglish(source: String): String {
 }
 
 private val ENGLISH_REPLACEMENTS = listOf(
+    "Live2D 模型" to "Live2D models",
+    "导入、切换与调整 Live2D 角色" to "Import, switch and adjust Live2D characters",
     "搜索时区" to "Search time zones",
     "当前时区：" to "Current time zone: ",
     "跟随系统时区（" to "Follow system time zone (",
@@ -665,6 +667,8 @@ private fun toJapanese(source: String): String {
 }
 
 private val JAPANESE_REPLACEMENTS = listOf(
+    "Live2D 模型" to "Live2D モデル",
+    "导入、切换与调整 Live2D 角色" to "Live2D モデルの導入・切り替え・調整",
     "搜索时区" to "タイムゾーンを検索",
     "当前时区：" to "現在のタイムゾーン：",
     "跟随系统时区（" to "システムのタイムゾーンに従う（",
