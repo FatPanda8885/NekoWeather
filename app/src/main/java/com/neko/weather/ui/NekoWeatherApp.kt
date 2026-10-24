@@ -1682,6 +1682,11 @@ private fun AiAdviceCard(
             ((elapsed - startedAt) / AI_REVEAL_FADE_MS).coerceIn(0f, 1f)
         }
     }
+    // AnimatedVisibility 退出动画期间内容仍按最新状态重组：清空后 advice 即为 null，
+    // 正文会瞬间变空导致折叠的是一块空白。保留最后一份非空文本让退出动画完整折叠。
+    var retainedAdvice by remember { mutableStateOf("") }
+    SideEffect { if (advice != null) retainedAdvice = advice }
+    val displayCharacters = if (advice != null) visibleCharacters else retainedAdvice.length
     SectionCard("AI 天气建议") {
         // 建议体整体的出现/清空与内部折叠/展开使用同一组 15 日式动画规格：
         // 按清空时整块收缩消失，初始提示文案以相同节奏淡入回到初始状态
@@ -1696,7 +1701,7 @@ private fun AiAdviceCard(
                     enter = expandVertically(animationSpec = tween(320)) + fadeIn(tween(260)),
                     exit = shrinkVertically(animationSpec = tween(280)) + fadeOut(tween(180)),
                 ) {
-                    MarkdownText(advice.orEmpty().take(visibleCharacters), trailingAlphas)
+                    MarkdownText(retainedAdvice.take(displayCharacters), trailingAlphas)
                 }
                 AnimatedVisibility(
                     visible = !expanded,
