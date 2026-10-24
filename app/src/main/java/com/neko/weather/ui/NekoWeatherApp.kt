@@ -2994,11 +2994,11 @@ private fun AppearancePage(
                 onClick = viewModel::resetCustomization,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(30.dp),
-                shape = RoundedCornerShape(16.dp),
+                    .height(40.dp),
+                shape = RoundedCornerShape(20.dp),
                 contentPadding = PaddingValues(horizontal = 16.dp, vertical = 0.dp),
             ) {
-                Text("恢复默认外观", fontSize = 13.sp)
+                Text("恢复默认外观")
             }
         }
     }
