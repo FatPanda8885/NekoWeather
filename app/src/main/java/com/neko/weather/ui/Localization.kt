@@ -19,6 +19,13 @@ private fun toEnglish(source: String): String {
 }
 
 private val ENGLISH_REPLACEMENTS = listOf(
+    "未检测到系统 TTS 引擎，请在系统设置的语言和输入中启用文字转语音输出" to "No system TTS engine found. Enable text-to-speech output under system language & input settings",
+    "当前 TTS 引擎缺少中文语音数据，请在系统设置的文字转语音输出中安装中文语音包" to "The current TTS engine lacks Chinese voice data. Install the Chinese voice pack from text-to-speech settings",
+    "语音播报失败，请检查 TTS 引擎与媒体音量" to "Speech failed. Check the TTS engine and media volume.",
+    "TTS 播报失败" to "TTS playback failed",
+    "TTS 播报出错（错误码 " to "TTS playback error (code ",
+    "（" to "(",
+    "）" to ")",
     "推送测试通知" to "Send test notification",
     "立即发送一条测试通知，用于验证通知通道" to "Posts one notification immediately to verify the channel",
     "开发" to "Developer",
@@ -674,6 +681,11 @@ private fun toJapanese(source: String): String {
 }
 
 private val JAPANESE_REPLACEMENTS = listOf(
+    "未检测到系统 TTS 引擎，请在系统设置的语言和输入中启用文字转语音输出" to "システムの TTS エンジンが見つかりません。設定の言語と入力でテキスト読み上げを有効にしてください",
+    "当前 TTS 引擎缺少中文语音数据，请在系统设置的文字转语音输出中安装中文语音包" to "現在の TTS エンジンには中国語音声データがありません。設定のテキスト読み上げから中国語音声をインストールしてください",
+    "语音播报失败，请检查 TTS 引擎与媒体音量" to "読み上げに失敗しました。TTS エンジンとメディア音量を確認してください",
+    "TTS 播报失败" to "TTS の読み上げに失敗しました",
+    "TTS 播报出错（错误码 " to "TTS 読み上げエラー（コード ",
     "推送测试通知" to "テスト通知を送信",
     "立即发送一条测试通知，用于验证通知通道" to "通知チャネルを確認するため、すぐに通知を 1 件送信します",
     "开发" to "開発",

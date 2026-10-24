@@ -139,6 +139,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private var refreshGeneration = 0L
 
     init {
+        systemTts.speakErrorHandler = { code ->
+            _state.update {
+                it.copy(message = if (code == null) "TTS 播报失败" else "TTS 播报出错（错误码 $code）")
+            }
+        }
         syncLauncherLabel(_state.value.displaySettings.language)
         refresh()
     }
@@ -797,7 +802,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             append("。")
         }
         if (!systemTts.speak(text, _state.value.voiceSettings)) {
-            _state.update { it.copy(message = "系统语音播报失败，请在系统设置中检查 TTS 引擎与中文语音数据") }
+            val failureMessage = when {
+                systemTts.isEngineMissing() -> "未检测到系统 TTS 引擎，请在系统设置的语言和输入中启用文字转语音输出"
+                systemTts.isChineseVoiceMissing() -> "当前 TTS 引擎缺少中文语音数据，请在系统设置的文字转语音输出中安装中文语音包"
+                else -> "语音播报失败，请检查 TTS 引擎与媒体音量"
+            }
+            _state.update { it.copy(message = failureMessage) }
         }
     }
 

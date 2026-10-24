@@ -1394,13 +1394,24 @@ private fun DailyForecastRow(day: DailyForecast, today: LocalDate) {
             tint = Color.White,
             modifier = Modifier.width(42.dp).size(23.dp),
         )
-        Text(day.condition, color = Color.White, fontSize = 13.sp, modifier = Modifier.weight(1f))
         Text(
-            day.precipitationProbability?.roundToInt()?.takeIf { it > 0 }?.let { "$it%" }.orEmpty(),
-            color = Color(0xFFD5ECFF),
-            fontSize = 12.sp,
-            modifier = Modifier.width(42.dp),
+            day.condition,
+            color = Color.White,
+            fontSize = 13.sp,
+            maxLines = 1,
+            softWrap = false,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f).padding(start = 2.dp, end = 4.dp),
         )
+        val precipitation = day.precipitationProbability?.roundToInt()?.takeIf { it > 0 }
+        if (precipitation != null) {
+            Text(
+                "$precipitation%",
+                color = Color(0xFFD5ECFF),
+                fontSize = 12.sp,
+                modifier = Modifier.width(42.dp),
+            )
+        }
         Text("${temperatureText(day.low)}  /  ${temperatureText(day.high)}", color = Color.White, fontWeight = FontWeight.Medium)
     }
 }
