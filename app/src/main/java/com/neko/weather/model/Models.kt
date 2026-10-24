@@ -1,5 +1,7 @@
 package com.neko.weather.model
 
+import androidx.compose.ui.graphics.Color
+
 data class WeatherApiConfig(
     val displayName: String = "Open-Meteo",
     val endpoint: String = "https://api.open-meteo.com/v1/forecast",
@@ -159,11 +161,61 @@ enum class TemperatureUnit { CELSIUS, FAHRENHEIT, KELVIN }
 enum class WindSpeedUnit { KILOMETRES_PER_HOUR, METRES_PER_SECOND }
 enum class AppLanguage { SIMPLIFIED_CHINESE, TRADITIONAL_CHINESE, ENGLISH, JAPANESE }
 
+/** 主题模式：AUTO 跟随系统深色模式。 */
+enum class ThemeMode { LIGHT, DARK, AUTO }
+
+data class ThemeSettings(
+    val mode: ThemeMode = ThemeMode.AUTO,
+    val useDynamicColor: Boolean = false,
+    /** ARGB 颜色值（0xAARRGGBB），经 toArgb 往返以保证与色板颜色可比。 */
+    val seedColorValue: Long = 0xFF3568D4,
+) {
+    val seedColor: Color get() = Color(seedColorValue.toInt())
+
+    companion object {
+        fun modeFromName(raw: String): ThemeMode =
+            ThemeMode.entries.firstOrNull { it.name == raw } ?: ThemeMode.AUTO
+    }
+}
+
+/** 主题色色板：以 HCT 色彩空间按色相均分派生（hue = base * 35）。 */
+fun themeColorOptions(): List<Color> = (1..10).map { base ->
+    Color(com.materialkolor.hct.Hct.from(base * 35.0, 40.0, 40.0).toInt())
+} + Color(0xFF3568D4)
+
 data class DisplaySettings(
     val temperatureUnit: TemperatureUnit = TemperatureUnit.CELSIUS,
     val windSpeedUnit: WindSpeedUnit = WindSpeedUnit.KILOMETRES_PER_HOUR,
     val language: AppLanguage = AppLanguage.SIMPLIFIED_CHINESE,
+    /** 空串表示跟随系统时区，否则为 IANA 时区 ID（如 Asia/Shanghai）。 */
+    val timeZoneId: String = "",
 )
+
+/** 外观预设：皮肤四类资源的组合，可一键切换、导入导出。 */
+data class AppearancePreset(
+    val id: String,
+    val name: String,
+    val fontPath: String = "",
+    val logoPath: String = "",
+    val backgroundPath: String = "",
+    val backgroundIsVideo: Boolean = false,
+    val weatherBackgrounds: Map<String, String> = emptyMap(),
+) {
+    /** 资源摘要，例如「字体 · Logo · 天气背景 ×2」。 */
+    fun summary(): String = buildList {
+        if (fontPath.isNotBlank()) add("字体")
+        if (logoPath.isNotBlank()) add("Logo")
+        if (backgroundPath.isNotBlank()) add(if (backgroundIsVideo) "视频背景" else "静态背景")
+        if (weatherBackgrounds.isNotEmpty()) add("天气背景 ×${weatherBackgrounds.size}")
+    }.joinToString(" · ").ifBlank { "默认外观" }
+}
+
+data class AppearancePresets(
+    val presets: List<AppearancePreset> = emptyList(),
+    val selectedId: String = "",
+) {
+    val selected: AppearancePreset? get() = presets.firstOrNull { it.id == selectedId } ?: presets.firstOrNull()
+}
 
 const val DEFAULT_AI_CONTEXT = "你是专业天气生活顾问。请用简洁中文给出有依据、可执行的建议，不要夸大风险。"
 

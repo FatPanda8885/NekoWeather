@@ -182,9 +182,12 @@ class CustomizationManager(private val context: Context) {
     }
 
     fun reset(): CustomizationSettings {
-        root.deleteRecursively()
+        // 保留 presets/ 子目录与外观预设清单：恢复默认只清空当前生效资源。
+        root.listFiles()?.filterNot { it.name == "presets" }?.forEach(File::deleteRecursively)
         root.mkdirs()
+        val presetsJson = prefs.getString("appearancePresetsJson", null)
         prefs.edit().clear().apply()
+        if (presetsJson != null) prefs.edit().putString("appearancePresetsJson", presetsJson).apply()
         return load()
     }
 

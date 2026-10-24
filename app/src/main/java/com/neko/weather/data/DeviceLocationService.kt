@@ -28,7 +28,11 @@ class DeviceLocationService(private val context: Context) {
     ) == PackageManager.PERMISSION_GRANTED
 
     @SuppressLint("MissingPermission")
-    suspend fun locate(): CityLocation {
+    suspend fun locate(): CityLocation = reverseGeocode(currentLocation())
+
+    /** 单次取当前坐标：优先新鲜的缓存位置，否则请求一次定位（15 秒超时）。 */
+    @SuppressLint("MissingPermission")
+    suspend fun currentLocation(): Location {
         check(hasPermission()) { "请先允许位置权限" }
         val provider = when {
             manager.isProviderEnabled(LocationManager.NETWORK_PROVIDER) -> LocationManager.NETWORK_PROVIDER
@@ -36,12 +40,11 @@ class DeviceLocationService(private val context: Context) {
             else -> throw IllegalStateException("系统定位服务未开启")
         }
         val cached = manager.getLastKnownLocation(provider)
-        val location = if (cached != null && System.currentTimeMillis() - cached.time < 30 * 60 * 1000L) {
+        return if (cached != null && System.currentTimeMillis() - cached.time < 30 * 60 * 1000L) {
             cached
         } else {
             withTimeout(15_000) { requestSingleLocation(provider) }
         }
-        return reverseGeocode(location)
     }
 
     @SuppressLint("MissingPermission")

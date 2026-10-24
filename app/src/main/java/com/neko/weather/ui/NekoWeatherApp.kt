@@ -44,6 +44,7 @@ import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
@@ -94,6 +95,7 @@ import androidx.compose.material.icons.outlined.Visibility
 import androidx.compose.material.icons.outlined.WaterDrop
 import androidx.compose.material.icons.outlined.WbSunny
 import androidx.compose.material.icons.outlined.Info
+import androidx.compose.material.icons.outlined.Public
 import androidx.compose.material.icons.outlined.Notifications
 import androidx.compose.material.icons.outlined.Palette
 import androidx.compose.material.icons.outlined.Person
@@ -154,6 +156,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.text.font.FontWeight
@@ -204,6 +207,16 @@ import com.neko.weather.data.BackupCategories
 import com.neko.weather.ui.settings.ActionEmphasis
 import com.neko.weather.ui.settings.ChoiceOption
 import com.neko.weather.ui.settings.SettingsPanel
+import com.neko.weather.ui.settings.ThemeColorPage
+import com.neko.weather.ui.settings.AppearancePresetsPage
+import com.neko.weather.ui.settings.AppearancePresetEditorPage
+import com.neko.weather.ui.settings.TimeZoneSettingsPage
+import com.neko.weather.data.AppTimeZone
+import com.neko.weather.model.ThemeMode
+import com.materialkolor.rememberDynamicColorScheme
+import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.material3.dynamicDarkColorScheme
+import androidx.compose.material3.dynamicLightColorScheme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
@@ -229,6 +242,12 @@ private val Divider = Color.White.copy(alpha = 0.20f)
 private val LocalTemperatureUnit = staticCompositionLocalOf { TemperatureUnit.CELSIUS }
 private val LocalWindSpeedUnit = staticCompositionLocalOf { WindSpeedUnit.KILOMETRES_PER_HOUR }
 
+/** 把天气所在地的本地时间串换算到用户所选显示时区；默认恒等。 */
+private val LocalTimeShift = staticCompositionLocalOf<(String) -> String> { { it } }
+
+/** 用户所选显示时区（含跟随系统的解析结果）。 */
+private val LocalDisplayZone = staticCompositionLocalOf { java.time.ZoneId.systemDefault() }
+
 private object SettingsPageId {
     const val ROOT = 1
     const val PROVIDERS = 2
@@ -243,13 +262,23 @@ private object SettingsPageId {
     const val API_USAGE = 11
     const val DISPLAY_AND_REFRESH = 12
     const val AI_EDITOR = 13
-    val CHILD_PAGES = setOf(PROVIDERS, VOICE, ABOUT, APPEARANCE, AI, AI_EDITOR, NOTIFICATIONS, BACKUP, API_USAGE, DISPLAY_AND_REFRESH)
+    const val THEME_COLOR = 14
+    const val PRESETS = 15
+    const val PRESET_EDITOR = 16
+    const val TIMEZONE = 17
+    const val LIVE2D = 18
+    val CHILD_PAGES = setOf(PROVIDERS, VOICE, ABOUT, APPEARANCE, AI, AI_EDITOR, NOTIFICATIONS, BACKUP, API_USAGE, DISPLAY_AND_REFRESH, THEME_COLOR, PRESETS, PRESET_EDITOR, TIMEZONE, LIVE2D)
 }
 
 private fun parentPageOf(page: Int): Int = when (page) {
-    SettingsPageId.LIVE2D_EDITOR -> SettingsPageId.APPEARANCE
+    SettingsPageId.LIVE2D -> SettingsPageId.APPEARANCE
+    SettingsPageId.LIVE2D_EDITOR -> SettingsPageId.LIVE2D
     SettingsPageId.AI_EDITOR -> SettingsPageId.AI
     SettingsPageId.API_USAGE -> SettingsPageId.PROVIDERS
+    SettingsPageId.THEME_COLOR -> SettingsPageId.APPEARANCE
+    SettingsPageId.PRESETS -> SettingsPageId.THEME_COLOR
+    SettingsPageId.PRESET_EDITOR -> SettingsPageId.PRESETS
+    SettingsPageId.TIMEZONE -> SettingsPageId.DISPLAY_AND_REFRESH
     in SettingsPageId.CHILD_PAGES -> SettingsPageId.ROOT
     else -> 0
 }
@@ -265,6 +294,9 @@ fun NekoWeatherApp(viewModel: MainViewModel) {
     var aiEditingId by remember { mutableStateOf<String?>(null) }
     var aiSelectionMode by remember { mutableStateOf(false) }
     var aiSelectedIds by remember { mutableStateOf(emptySet<String>()) }
+    var presetEditingId by remember { mutableStateOf<String?>(null) }
+    var presetSelectionMode by remember { mutableStateOf(false) }
+    var presetSelectedIds by remember { mutableStateOf(emptySet<String>()) }
     val settingsScrollState = rememberScrollState()
     var clockTick by remember { mutableLongStateOf(System.currentTimeMillis()) }
     val isNight = state.weather?.let { isNightTime(it, clockTick) } == true
@@ -285,6 +317,11 @@ fun NekoWeatherApp(viewModel: MainViewModel) {
             aiSelectedIds = emptySet()
         }
         if (page != SettingsPageId.AI_EDITOR) aiEditingId = null
+        if (page != SettingsPageId.PRESETS) {
+            presetSelectionMode = false
+            presetSelectedIds = emptySet()
+        }
+        if (page != SettingsPageId.PRESET_EDITOR) presetEditingId = null
     }
 
     DisposableEffect(lifecycleOwner) {
@@ -316,15 +353,6 @@ fun NekoWeatherApp(viewModel: MainViewModel) {
         }
     }
 
-    SideEffect {
-        view.context.findActivity()?.let { activity ->
-            WindowCompat.getInsetsController(activity.window, view).apply {
-                isAppearanceLightStatusBars = page != 0 || !isNight
-                isAppearanceLightNavigationBars = page != 0 || !isNight
-            }
-        }
-    }
-
     LaunchedEffect(state.message) {
         state.message?.let {
             snackbar.showSnackbar(localizedText(it, state.displaySettings.language))
@@ -332,13 +360,46 @@ fun NekoWeatherApp(viewModel: MainViewModel) {
         }
     }
 
+    val theme = state.themeSettings
+    val darkTheme = when (theme.mode) {
+        ThemeMode.LIGHT -> false
+        ThemeMode.DARK -> true
+        ThemeMode.AUTO -> isSystemInDarkTheme()
+    }
+    val themeColorScheme = when {
+        theme.useDynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S ->
+            if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
+        else -> rememberDynamicColorScheme(seedColor = theme.seedColor, isDark = darkTheme, isAmoled = false)
+    }
+    val locationZone = remember(state.weather?.current?.timezone) {
+        AppTimeZone.locationZone(state.weather?.current?.timezone)
+    }
+    val displayZone = remember(state.displaySettings.timeZoneId) {
+        AppTimeZone.resolve(state.displaySettings.timeZoneId)
+    }
+    val timeShift = remember(locationZone, displayZone) {
+        { text: String -> AppTimeZone.convertLocationTime(text, locationZone, displayZone) }
+    }
+
+    SideEffect {
+        view.context.findActivity()?.let { activity ->
+            val lightBars = if (page != 0) !darkTheme else !isNight
+            WindowCompat.getInsetsController(activity.window, view).apply {
+                isAppearanceLightStatusBars = lightBars
+                isAppearanceLightNavigationBars = lightBars
+            }
+        }
+    }
+
     CompositionLocalProvider(
         LocalAppLanguage provides state.displaySettings.language,
         LocalTemperatureUnit provides state.displaySettings.temperatureUnit,
         LocalWindSpeedUnit provides state.displaySettings.windSpeedUnit,
+        LocalDisplayZone provides displayZone,
+        LocalTimeShift provides timeShift,
     ) {
     MaterialTheme(
-        colorScheme = androidx.compose.material3.lightColorScheme(primary = NekoBlue),
+        colorScheme = themeColorScheme,
         typography = customFontFamily?.let(::customTypography) ?: Typography(),
     ) {
         Box(Modifier.fillMaxSize()) {
@@ -382,6 +443,11 @@ fun NekoWeatherApp(viewModel: MainViewModel) {
                                             SettingsPageId.API_USAGE -> "API 请求统计"
                                             SettingsPageId.DISPLAY_AND_REFRESH -> "显示与更新"
                                             SettingsPageId.AI_EDITOR -> "AI 模型"
+                                            SettingsPageId.THEME_COLOR -> "主题色彩"
+                                            SettingsPageId.LIVE2D -> "Live2D 模型"
+                                            SettingsPageId.PRESETS -> "外观预设"
+                                            SettingsPageId.PRESET_EDITOR -> "编辑预设"
+                                            SettingsPageId.TIMEZONE -> "时区"
                                             else -> "AI 天气建议"
                                         },
                                     )
@@ -400,6 +466,14 @@ fun NekoWeatherApp(viewModel: MainViewModel) {
                                             page = SettingsPageId.AI_EDITOR
                                         }) {
                                             Icon(Icons.Default.Add, "添加模型")
+                                        }
+                                    }
+                                    if (targetPage == SettingsPageId.PRESETS) {
+                                        IconButton(onClick = {
+                                            presetEditingId = viewModel.createAppearancePreset()
+                                            page = SettingsPageId.PRESET_EDITOR
+                                        }) {
+                                            Icon(Icons.Default.Add, "从当前外观新建预设")
                                         }
                                     }
                                     if (targetPage == SettingsPageId.PROVIDERS) {
@@ -435,12 +509,63 @@ fun NekoWeatherApp(viewModel: MainViewModel) {
                             SettingsPageId.CITIES -> CityPage(state, viewModel, onClose = { page = 0 }, modifier = Modifier.padding(padding))
                             SettingsPageId.VOICE -> VoicePage(state, viewModel, Modifier.padding(padding))
                             SettingsPageId.ABOUT -> AboutPage(state, viewModel, Modifier.padding(padding))
-                            SettingsPageId.APPEARANCE -> AppearancePage(state, viewModel, onOpenEditor = { page = SettingsPageId.LIVE2D_EDITOR }, modifier = Modifier.padding(padding))
+                            SettingsPageId.APPEARANCE -> AppearancePage(
+                                state = state,
+                                viewModel = viewModel,
+                                onOpenLive2d = { page = SettingsPageId.LIVE2D },
+                                onOpenThemeColor = { page = SettingsPageId.THEME_COLOR },
+                                modifier = Modifier.padding(padding),
+                            )
+                            SettingsPageId.LIVE2D -> Live2dPage(
+                                state = state,
+                                viewModel = viewModel,
+                                onOpenEditor = { page = SettingsPageId.LIVE2D_EDITOR },
+                                modifier = Modifier.padding(padding),
+                            )
+                            SettingsPageId.THEME_COLOR -> ThemeColorPage(
+                                state = state,
+                                viewModel = viewModel,
+                                onOpenPresets = { page = SettingsPageId.PRESETS },
+                                modifier = Modifier.padding(padding),
+                            )
+                            SettingsPageId.PRESETS -> AppearancePresetsPage(
+                                state = state,
+                                viewModel = viewModel,
+                                selectionMode = presetSelectionMode,
+                                selectedIds = presetSelectedIds,
+                                onToggleSelection = { id ->
+                                    presetSelectedIds = if (id in presetSelectedIds) presetSelectedIds - id else presetSelectedIds + id
+                                },
+                                onStartSelection = { id ->
+                                    presetSelectionMode = true
+                                    presetSelectedIds = setOf(id)
+                                },
+                                onExitSelection = {
+                                    presetSelectionMode = false
+                                    presetSelectedIds = emptySet()
+                                },
+                                onEdit = { id ->
+                                    presetEditingId = id
+                                    page = SettingsPageId.PRESET_EDITOR
+                                },
+                                modifier = Modifier.padding(padding),
+                            )
+                            SettingsPageId.PRESET_EDITOR -> AppearancePresetEditorPage(
+                                state = state,
+                                viewModel = viewModel,
+                                editingId = presetEditingId,
+                                onDone = {
+                                    page = SettingsPageId.PRESETS
+                                    presetEditingId = null
+                                },
+                                modifier = Modifier.padding(padding),
+                            )
+                            SettingsPageId.TIMEZONE -> TimeZoneSettingsPage(state, viewModel, Modifier.padding(padding))
                             SettingsPageId.LIVE2D_EDITOR -> Live2dLayoutEditor(state, viewModel, Modifier.padding(padding))
                             SettingsPageId.NOTIFICATIONS -> NotificationSettingsPage(state, viewModel, Modifier.padding(padding))
                             SettingsPageId.BACKUP -> BackupRestorePage(viewModel, Modifier.padding(padding))
                             SettingsPageId.API_USAGE -> ApiUsagePage(Modifier.padding(padding))
-                            SettingsPageId.DISPLAY_AND_REFRESH -> DisplayAndRefreshPage(state, viewModel, Modifier.padding(padding))
+                            SettingsPageId.DISPLAY_AND_REFRESH -> DisplayAndRefreshPage(state, viewModel, onOpenTimeZone = { page = SettingsPageId.TIMEZONE }, modifier = Modifier.padding(padding))
                             SettingsPageId.AI -> AiProfilesPage(
                                 state = state,
                                 viewModel = viewModel,
@@ -615,71 +740,232 @@ private fun WeatherPage(
     }
 }
 
+// ---- 天气场景动画的随机参数：以天气为种子预生成，避免逐帧随机导致闪烁 ----
+
+private class RainDropSpec(val xFraction: Float, val phase: Float, val speed: Float, val length: Float, val width: Float, val alpha: Float, val slant: Float, val far: Boolean)
+
+private class SnowFlakeSpec(val xFraction: Float, val phase: Float, val speed: Float, val radius: Float, val alpha: Float, val swayAmplitude: Float, val swayFrequency: Float)
+
+private class CloudSpec(val yFraction: Float, val phase: Float, val scale: Float, val speed: Float, val far: Boolean)
+
+private class StarSpec(val xFraction: Float, val yFraction: Float, val radius: Float, val phase: Float, val speed: Float)
+
 @Composable
 private fun WeatherSceneLayer(condition: String, isNight: Boolean) {
     val hasClouds = listOf("云", "阴", "雨", "雷", "雪", "雾").any(condition::contains)
     val hasRain = "雨" in condition || "雷" in condition
     val hasSnow = "雪" in condition
+    val isClear = "晴" in condition
 
-    if (!hasClouds && !hasRain && !hasSnow) {
-        if (!isNight && "晴" in condition) {
-            Canvas(Modifier.fillMaxSize().alpha(0.55f)) {
-                drawCircle(Color(0xFFFFE89A).copy(alpha = 0.32f), radius = 150f, center = Offset(size.width * .83f, size.height * .12f))
-                drawCircle(Color(0xFFFFF2B8).copy(alpha = 0.72f), radius = 52f, center = Offset(size.width * .83f, size.height * .12f))
-            }
+    val random = remember(condition, isNight) { kotlin.random.Random(condition.hashCode() * 31 + if (isNight) 7 else 13) }
+    val rainDrops = remember(condition, isNight) {
+        List(64) { index ->
+            val far = index < 34
+            RainDropSpec(
+                xFraction = random.nextFloat(),
+                phase = random.nextFloat(),
+                speed = if (far) random.nextFloat() * 0.15f + 0.85f else random.nextFloat() * 0.35f + 1.1f,
+                length = if (far) random.nextFloat() * 7f + 12f else random.nextFloat() * 12f + 20f,
+                width = if (far) random.nextFloat() * 0.5f + 1.3f else random.nextFloat() * 0.7f + 2.2f,
+                alpha = if (far) random.nextFloat() * 0.12f + 0.2f else random.nextFloat() * 0.2f + 0.4f,
+                slant = random.nextFloat() * 14f + 12f,
+                far = far,
+            )
         }
-        return
+    }
+    val snowFlakes = remember(condition, isNight) {
+        List(42) {
+            SnowFlakeSpec(
+                xFraction = random.nextFloat(),
+                phase = random.nextFloat(),
+                speed = random.nextFloat() * 0.5f + 0.5f,
+                radius = random.nextFloat() * 2.8f + 1.8f,
+                alpha = random.nextFloat() * 0.4f + 0.4f,
+                swayAmplitude = random.nextFloat() * 16f + 14f,
+                swayFrequency = random.nextFloat() * 0.8f + 0.8f,
+            )
+        }
+    }
+    val clouds = remember(condition, isNight) {
+        List(6) { index ->
+            val far = index < 3
+            CloudSpec(
+                yFraction = if (far) random.nextFloat() * 0.16f + 0.06f else random.nextFloat() * 0.22f + 0.1f,
+                phase = random.nextFloat(),
+                scale = if (far) random.nextFloat() * 0.25f + 0.55f else random.nextFloat() * 0.35f + 0.9f,
+                speed = if (far) 0.45f + random.nextFloat() * 0.2f else 0.9f + random.nextFloat() * 0.35f,
+                far = far,
+            )
+        }
+    }
+    val stars = remember(condition, isNight) {
+        List(26) {
+            StarSpec(
+                xFraction = random.nextFloat(),
+                yFraction = random.nextFloat() * 0.55f,
+                radius = random.nextFloat() * 1.3f + 0.9f,
+                phase = random.nextFloat() * (2f * Math.PI.toFloat()),
+                speed = random.nextFloat() * 1.4f + 0.6f,
+            )
+        }
     }
 
     val transition = rememberInfiniteTransition(label = "weatherScene")
     val cloudProgress by transition.animateFloat(
         0f, 1f,
-        animationSpec = infiniteRepeatable(tween(22_000, easing = LinearEasing), RepeatMode.Restart),
+        animationSpec = infiniteRepeatable(tween(26_000, easing = LinearEasing), RepeatMode.Restart),
         label = "cloudProgress",
     )
     val precipitationProgress by transition.animateFloat(
         0f, 1f,
         animationSpec = infiniteRepeatable(
-            tween(if (hasSnow) 7_000 else 1_350, easing = LinearEasing),
+            tween(if (hasSnow) 9_000 else 1_350, easing = LinearEasing),
             RepeatMode.Restart,
         ),
         label = "precipitationProgress",
     )
-    Canvas(Modifier.fillMaxSize().alpha(0.55f)) {
-        if (!isNight && "晴" in condition) {
-            drawCircle(Color(0xFFFFE89A).copy(alpha = 0.32f), radius = 150f, center = Offset(size.width * .83f, size.height * .12f))
-            drawCircle(Color(0xFFFFF2B8).copy(alpha = 0.72f), radius = 52f, center = Offset(size.width * .83f, size.height * .12f))
+    val twinkleProgress by transition.animateFloat(
+        0f, 1f,
+        animationSpec = infiniteRepeatable(tween(4_000, easing = LinearEasing), RepeatMode.Restart),
+        label = "twinkleProgress",
+    )
+    val sunPulse by transition.animateFloat(
+        0f, 1f,
+        animationSpec = infiniteRepeatable(tween(5_200, easing = LinearEasing), RepeatMode.Reverse),
+        label = "sunPulse",
+    )
+
+    Canvas(Modifier.fillMaxSize().alpha(0.6f)) {
+        if (isClear && isNight) {
+            drawNightSky(stars, twinkleProgress)
+        } else if (isClear) {
+            drawSun(size.width * 0.83f, size.height * 0.12f, sunPulse)
         }
         if (hasClouds) {
-            val travelDistance = size.width + 700f
-            repeat(4) { group ->
-                // 每朵云只在完全离开屏幕后回到另一侧，循环边界不可见。
-                val phase = (cloudProgress + group * 0.27f) % 1f
-                val x = -300f + phase * travelDistance
-                val y = 105f + (group % 3) * 105f
-                val cloud = if ("阴" in condition || "雨" in condition) Color(0xFF33485B) else Color.White
-                val cloudAlpha = if ("雾" in condition) .14f else .24f
-                drawCircle(cloud.copy(alpha = cloudAlpha), 80f, Offset(x, y))
-                drawCircle(cloud.copy(alpha = cloudAlpha), 105f, Offset(x + 75f, y - 20f))
-                drawCircle(cloud.copy(alpha = cloudAlpha), 72f, Offset(x + 155f, y + 5f))
-            }
+            drawCloudLayers(clouds, cloudProgress, overcast = "阴" in condition || "雨" in condition || "雷" in condition, fog = "雾" in condition)
         }
         if (hasRain) {
-            repeat(45) { index ->
-                val phase = (precipitationProgress + index / 45f) % 1f
-                val x = (index * 83f) % size.width - phase * 90f
-                val y = -35f + phase * (size.height + 70f)
-                drawLine(Color(0xFFCDEBFF).copy(alpha = .45f), Offset(x, y), Offset(x - 7f, y + 25f), strokeWidth = 2.2f, cap = StrokeCap.Round)
-            }
+            drawRain(rainDrops, precipitationProgress)
         } else if (hasSnow) {
-            repeat(35) { index ->
-                val phase = (precipitationProgress + index / 35f) % 1f
-                val drift = kotlin.math.sin(phase * Math.PI * 2 + index) * 22f
-                val x = (index * 97f) % size.width + drift.toFloat()
-                val y = -20f + phase * (size.height + 40f)
-                drawCircle(Color.White.copy(alpha = .65f), 3f + index % 4, Offset(x, y))
+            drawSnow(snowFlakes, precipitationProgress)
+        }
+    }
+}
+
+/** 太阳：三层径向光晕 + 呼吸脉动。 */
+private fun DrawScope.drawSun(centerX: Float, centerY: Float, pulse: Float) {
+    val breath = 1f + (pulse - 0.5f) * 0.08f
+    val warm = Color(0xFFFFE89A)
+    val core = Color(0xFFFFF3C4)
+    drawCircle(
+        brush = Brush.radialGradient(
+            colors = listOf(warm.copy(alpha = 0.28f * breath), warm.copy(alpha = 0.10f), Color.Transparent),
+            center = Offset(centerX, centerY),
+            radius = 210f * breath,
+        ),
+        radius = 210f * breath,
+        center = Offset(centerX, centerY),
+    )
+    drawCircle(
+        brush = Brush.radialGradient(
+            colors = listOf(warm.copy(alpha = 0.4f), warm.copy(alpha = 0.08f), Color.Transparent),
+            center = Offset(centerX, centerY),
+            radius = 108f * breath,
+        ),
+        radius = 108f * breath,
+        center = Offset(centerX, centerY),
+    )
+    drawCircle(
+        brush = Brush.radialGradient(
+            colors = listOf(core, Color(0xFFFFDF8E)),
+            center = Offset(centerX, centerY),
+            radius = 46f * breath,
+        ),
+        radius = 46f * breath,
+        center = Offset(centerX, centerY),
+    )
+}
+
+/** 夜空：柔和月亮与缓慢闪烁的星点。 */
+private fun DrawScope.drawNightSky(stars: List<StarSpec>, twinkle: Float) {
+    val moonX = size.width * 0.83f
+    val moonY = size.height * 0.12f
+    drawCircle(
+        brush = Brush.radialGradient(
+            colors = listOf(Color(0xFFBFD4EE).copy(alpha = 0.20f), Color(0xFFBFD4EE).copy(alpha = 0.05f), Color.Transparent),
+            center = Offset(moonX, moonY),
+            radius = 120f,
+        ),
+        radius = 120f,
+        center = Offset(moonX, moonY),
+    )
+    drawCircle(Color(0xFFE9EFF9).copy(alpha = 0.88f), radius = 30f, center = Offset(moonX, moonY))
+    // 用一块偏移的暗色半透明圆制造月面阴影，形成凸月观感
+    drawCircle(Color(0xFF233046).copy(alpha = 0.55f), radius = 26f, center = Offset(moonX + 13f, moonY - 9f))
+    stars.forEach { star ->
+        val twinkleAlpha = 0.45f + 0.55f * (0.5f + 0.5f * kotlin.math.sin(twinkle * 2f * Math.PI.toFloat() * star.speed + star.phase))
+        drawCircle(
+            Color.White.copy(alpha = 0.7f * twinkleAlpha),
+            radius = star.radius,
+            center = Offset(star.xFraction * size.width, star.yFraction * size.height),
+        )
+    }
+}
+
+/** 云层：远景/近景两层，每朵云由一组圆簇构成，先画放大低透明度的晕圈再画主体。 */
+private fun DrawScope.drawCloudLayers(clouds: List<CloudSpec>, progress: Float, overcast: Boolean, fog: Boolean) {
+    val cloudColor = if (overcast) Color(0xFF33485B) else Color.White
+    val puffRadii = listOf(38f, 54f, 66f, 58f, 44f, 30f)
+    val puffOffsets = listOf(-125f, -75f, -15f, 48f, 105f, 152f)
+    val puffLift = listOf(2f, -14f, -22f, -16f, -4f, 6f)
+    clouds.forEach { cloud ->
+        val alpha = when {
+            fog -> if (cloud.far) 0.10f else 0.16f
+            cloud.far -> 0.13f
+            else -> 0.26f
+        }
+        val travel = size.width + 900f * cloud.scale
+        val phase = (progress * cloud.speed + cloud.phase) % 1f
+        val x = -450f * cloud.scale + phase * travel
+        val y = size.height * cloud.yFraction + kotlin.math.sin(phase * 2f * Math.PI.toFloat()) * 6f
+        fun paintPass(scale: Float, extraAlpha: Float) {
+            puffRadii.forEachIndexed { index, radius ->
+                drawCircle(
+                    cloudColor.copy(alpha = (alpha * extraAlpha).coerceIn(0f, 1f)),
+                    radius = radius * cloud.scale * scale,
+                    center = Offset(x + puffOffsets[index] * cloud.scale * scale, y + puffLift[index] * cloud.scale),
+                )
             }
         }
+        if (!fog) paintPass(scale = 1.3f, extraAlpha = 0.32f)
+        paintPass(scale = 1f, extraAlpha = 1f)
+    }
+}
+
+/** 雨：远近两层随机雨滴，带风斜与速度差。 */
+private fun DrawScope.drawRain(drops: List<RainDropSpec>, progress: Float) {
+    drops.forEach { drop ->
+        val phase = (progress * drop.speed + drop.phase) % 1f
+        val y = -40f + phase * (size.height + 90f)
+        val x = drop.xFraction * (size.width + 60f) - 30f - phase * drop.slant
+        drawLine(
+            Color(0xFFCDEBFF).copy(alpha = drop.alpha),
+            Offset(x, y),
+            Offset(x - drop.slant * 0.3f, y + drop.length),
+            strokeWidth = drop.width,
+            cap = StrokeCap.Round,
+        )
+    }
+}
+
+/** 雪：随机大小的雪花，各自以不同幅度与频率左右摇摆下落。 */
+private fun DrawScope.drawSnow(flakes: List<SnowFlakeSpec>, progress: Float) {
+    flakes.forEach { flake ->
+        val phase = (progress * flake.speed + flake.phase) % 1f
+        val y = -20f + phase * (size.height + 50f)
+        val sway = kotlin.math.sin(phase * 2f * Math.PI.toFloat() * flake.swayFrequency + flake.phase * 7f) * flake.swayAmplitude
+        val x = flake.xFraction * (size.width + 40f) - 20f + sway
+        drawCircle(Color.White.copy(alpha = flake.alpha), radius = flake.radius, center = Offset(x, y))
     }
 }
 
@@ -752,7 +1038,7 @@ private fun WeatherToolbar(
             }
             Text(state.config.displayName, color = Color.White.copy(alpha = 0.75f), fontSize = 12.sp)
             state.weather?.let {
-                Text(lastUpdatedText(it.current.fetchedAtMillis), color = Color.White.copy(alpha = .58f), fontSize = 10.sp)
+                Text(lastUpdatedText(it.current.fetchedAtMillis, LocalDisplayZone.current), color = Color.White.copy(alpha = .58f), fontSize = 10.sp)
             }
         }
         IconButton(viewModel::refresh, enabled = !state.loading) {
@@ -765,9 +1051,9 @@ private fun WeatherToolbar(
     }
 }
 
-private fun lastUpdatedText(timestamp: Long): String {
-    val time = java.time.Instant.ofEpochMilli(timestamp).atZone(ZoneId.systemDefault())
-    val now = ZonedDateTime.now()
+private fun lastUpdatedText(timestamp: Long, zone: ZoneId = ZoneId.systemDefault()): String {
+    val time = java.time.Instant.ofEpochMilli(timestamp).atZone(zone)
+    val now = ZonedDateTime.now(zone)
     val prefix = if (time.toLocalDate() == now.toLocalDate()) "" else time.format(DateTimeFormatter.ofPattern("M/d "))
     return "上次更新于 $prefix${time.format(DateTimeFormatter.ofPattern("HH:mm"))}"
 }
@@ -1008,7 +1294,7 @@ private fun HourlyStrip(hourly: List<HourlyForecast>) {
     Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(3.dp)) {
         hourly.forEachIndexed { index, item ->
             Column(Modifier.width(55.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                Text(if (index == 0) "现在" else item.time.takeLast(5), color = Color.White, fontSize = 11.sp)
+                Text(if (index == 0) "现在" else LocalTimeShift.current(item.time).takeLast(5), color = Color.White, fontSize = 11.sp)
                 Icon(
                     weatherIcon(item.condition),
                     item.condition,
@@ -1213,7 +1499,7 @@ private fun SunCard(weather: WeatherDashboard) {
         val sameDate = point.time.length < 10 || today?.date == null || point.time.take(10) == today.date
         sameDate && minute != null && sunriseMinute != null && daySunsetMinute != null && minute in sunriseMinute..daySunsetMinute
     }
-    val solarNoon = daylightPoints.maxByOrNull { it.elevation }?.time?.takeLast(5) ?: "12:00"
+    val solarNoon = daylightPoints.maxByOrNull { it.elevation }?.time?.let(LocalTimeShift.current)?.takeLast(5) ?: "12:00"
     val solarNoonMinute = minuteOfDay(daylightPoints.maxByOrNull { it.elevation }?.time)
     val sameHalfDayIndices = daylightPoints.indices.filter { index ->
         val pointMinute = minuteOfDay(daylightPoints[index].time)
@@ -1280,7 +1566,7 @@ private fun SunCard(weather: WeatherDashboard) {
             selectedSolarIndex?.let { index ->
                 daylightPoints.getOrNull(index)?.let { point ->
                     Text(
-                        "${point.time.takeLast(5)} · ${"%.1f".format(point.elevation)}°",
+                        "${LocalTimeShift.current(point.time).takeLast(5)} · ${"%.1f".format(point.elevation)}°",
                         color = Color.White,
                         fontSize = 11.sp,
                         modifier = Modifier.align(Alignment.TopCenter).background(Color(0xCC26384A), RoundedCornerShape(8.dp)).padding(horizontal = 8.dp, vertical = 4.dp),
@@ -1289,9 +1575,9 @@ private fun SunCard(weather: WeatherDashboard) {
             }
         }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            Text(today?.sunrise?.takeLast(5) ?: "日出", color = Color.White.copy(alpha = .65f), fontSize = 10.sp)
+            Text(today?.sunrise?.let(LocalTimeShift.current)?.takeLast(5) ?: "日出", color = Color.White.copy(alpha = .65f), fontSize = 10.sp)
             Text(solarNoon, color = Color.White.copy(alpha = .65f), fontSize = 10.sp)
-            Text(today?.sunset?.takeLast(5) ?: "日落", color = Color.White.copy(alpha = .65f), fontSize = 10.sp)
+            Text(today?.sunset?.let(LocalTimeShift.current)?.takeLast(5) ?: "日落", color = Color.White.copy(alpha = .65f), fontSize = 10.sp)
         }
     }
 }
@@ -1303,7 +1589,7 @@ private fun SunTime(label: String, value: String?) {
         Spacer(Modifier.width(8.dp))
         Column {
             Text(label, color = Color.White.copy(alpha = 0.7f), fontSize = 11.sp)
-            Text(value?.takeLast(5) ?: "—", color = Color.White, fontWeight = FontWeight.Medium)
+            Text(value?.let(LocalTimeShift.current)?.takeLast(5) ?: "—", color = Color.White, fontWeight = FontWeight.Medium)
         }
     }
 }
@@ -1674,7 +1960,7 @@ private fun RainCard(
             selectedRainIndex?.let { index ->
                 val probability = values.getOrNull(index) ?: return@let
                 Text(
-                    "${entries[index].time.takeLast(5)} · ${probability.roundToInt()}%",
+                    "${LocalTimeShift.current(entries[index].time).takeLast(5)} · ${probability.roundToInt()}%",
                     color = Color.White,
                     fontSize = 11.sp,
                     modifier = Modifier.align(Alignment.TopCenter).background(Color(0xCC26384A), RoundedCornerShape(8.dp)).padding(horizontal = 8.dp, vertical = 4.dp),
@@ -1687,7 +1973,7 @@ private fun RainCard(
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                 timeIndexes.forEach { index ->
                     Text(
-                        if (index == 0) "现在" else entries[index].time.takeLast(5),
+                        if (index == 0) "现在" else LocalTimeShift.current(entries[index].time).takeLast(5),
                         color = Color.White.copy(alpha = 0.65f),
                         fontSize = 10.sp,
                     )
@@ -2225,10 +2511,21 @@ private fun SettingsPage(
 }
 
 @Composable
-private fun DisplayAndRefreshPage(state: MainUiState, viewModel: MainViewModel, modifier: Modifier = Modifier) {
+private fun DisplayAndRefreshPage(state: MainUiState, viewModel: MainViewModel, onOpenTimeZone: () -> Unit, modifier: Modifier = Modifier) {
     var refreshInterval by remember(state.refreshSettings.intervalMinutes) { mutableIntStateOf(state.refreshSettings.intervalMinutes) }
     var freshnessMinutes by remember(state.refreshSettings.freshnessMinutes) { mutableIntStateOf(state.refreshSettings.freshnessMinutes) }
+    val timeZoneLabel = state.displaySettings.timeZoneId.takeIf(String::isNotBlank)
+        ?: "跟随系统（${java.time.ZoneId.systemDefault().id}）"
     SettingsPanel(modifier) {
+        Group("时间", "预报时间与日出日落将换算到所选时区显示") {
+            Entry(
+                icon = Icons.Outlined.Public,
+                title = "时区",
+                trailingText = timeZoneLabel,
+                showChevron = true,
+                onClick = onOpenTimeZone,
+            )
+        }
         Group("单位", "影响首页温度与风速的显示格式") {
             ChoiceRow(
                 label = "温度单位",
@@ -2484,10 +2781,10 @@ private fun AboutPage(state: MainUiState, viewModel: MainViewModel, modifier: Mo
     }
 }
 
-private data class PendingImageEdit(val uri: Uri, val kind: String, val title: String)
+internal data class PendingImageEdit(val uri: Uri, val kind: String, val title: String)
 
 @Composable
-private fun ImageCropDialog(
+internal fun ImageCropDialog(
     pending: PendingImageEdit,
     onDismiss: () -> Unit,
     onConfirm: (Bitmap) -> Unit,
@@ -2617,26 +2914,14 @@ private fun renderCroppedBitmap(
 private fun AppearancePage(
     state: MainUiState,
     viewModel: MainViewModel,
-    onOpenEditor: () -> Unit,
+    onOpenLive2d: () -> Unit,
+    onOpenThemeColor: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var pendingImageEdit by remember { mutableStateOf<PendingImageEdit?>(null) }
     var languageMenuExpanded by remember { mutableStateOf(false) }
-    val fontPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { it?.let { uri -> viewModel.importCustomization(uri, "font") } }
-    val logoPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        uri?.let { pendingImageEdit = PendingImageEdit(it, "logo", "裁切主页 Logo") }
-    }
     val appIconPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         uri?.let { pendingImageEdit = PendingImageEdit(it, "appicon", "裁切桌面图标") }
-    }
-    val imagePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        uri?.let { pendingImageEdit = PendingImageEdit(it, "background", "裁切通用背景") }
-    }
-    val videoPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { it?.let { uri -> viewModel.importCustomization(uri, "video") } }
-    val live2dPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { it?.let(viewModel::importLive2d) }
-    var pendingWeatherBackground by remember { mutableStateOf("weather_clear") }
-    val weatherBackgroundPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        uri?.let { pendingImageEdit = PendingImageEdit(it, pendingWeatherBackground, "裁切天气背景") }
     }
     val languageLabel = when (state.displaySettings.language) {
         AppLanguage.SIMPLIFIED_CHINESE -> "简体中文"
@@ -2645,6 +2930,16 @@ private fun AppearancePage(
         AppLanguage.JAPANESE -> "日本語"
     }
     SettingsPanel(modifier) {
+        Group("主题") {
+            Entry(
+                icon = Icons.Outlined.Palette,
+                title = "主题色彩",
+                description = "深浅模式、动态取色、主题色与外观预设",
+                trailingText = state.appearancePresets.selected?.name ?: null,
+                showChevron = true,
+                onClick = onOpenThemeColor,
+            )
+        }
         Group("语言") {
             Box {
                 Entry(
@@ -2671,30 +2966,7 @@ private fun AppearancePage(
                 }
             }
         }
-        Group(
-            title = "皮肤资源",
-            description = "资源保存在应用私有目录，可分别替换字体、Logo 和主界面背景。视频背景会静音循环播放。",
-        ) {
-            Entry(
-                title = if (state.customization.fontPath.isBlank()) "导入字体" else "更换字体",
-                trailingText = if (state.customization.fontPath.isNotBlank()) "已导入" else null,
-                trailing = {
-                    IconButton(onClick = { viewModel.resetCustomizationResource("font") }, enabled = state.customization.fontPath.isNotBlank()) {
-                        Icon(Icons.Default.Refresh, "恢复默认")
-                    }
-                },
-                onClick = { fontPicker.launch(arrayOf("font/ttf", "font/otf", "application/octet-stream")) },
-            )
-            Entry(
-                title = if (state.customization.logoPath.isBlank()) "导入主页 Logo" else "更换主页 Logo",
-                trailingText = if (state.customization.logoPath.isNotBlank()) "已导入" else null,
-                trailing = {
-                    IconButton(onClick = { viewModel.resetCustomizationResource("logo") }, enabled = state.customization.logoPath.isNotBlank()) {
-                        Icon(Icons.Default.Refresh, "恢复默认")
-                    }
-                },
-                onClick = { logoPicker.launch(arrayOf("image/*")) },
-            )
+        Group("桌面图标") {
             Entry(
                 title = if (state.customization.appIconPath.isBlank()) "导入桌面应用图标" else "更换桌面应用图标",
                 trailingText = if (state.customization.appIconPath.isNotBlank()) "已导入" else null,
@@ -2708,45 +2980,49 @@ private fun AppearancePage(
             if (state.customization.appIconPath.isNotBlank()) {
                 ActionRow(label = "添加自定义图标到桌面", onClick = viewModel::createDesktopShortcut)
             }
+        }
+        Group("Live2D") {
             Entry(
-                title = if (state.customization.backgroundPath.isNotBlank() && !state.customization.backgroundIsVideo) "更换静态背景" else "选择静态背景",
-                trailingText = if (state.customization.backgroundPath.isNotBlank() && !state.customization.backgroundIsVideo) "已导入" else null,
-                trailing = {
-                    IconButton(onClick = { viewModel.resetCustomizationResource("background") }, enabled = state.customization.backgroundPath.isNotBlank() && !state.customization.backgroundIsVideo) {
-                        Icon(Icons.Default.Refresh, "恢复默认")
-                    }
-                },
-                onClick = { imagePicker.launch(arrayOf("image/*")) },
-            )
-            Entry(
-                title = if (state.customization.backgroundPath.isNotBlank() && state.customization.backgroundIsVideo) "更换视频动态背景" else "选择视频动态背景",
-                trailingText = if (state.customization.backgroundPath.isNotBlank() && state.customization.backgroundIsVideo) "已导入" else null,
-                trailing = {
-                    IconButton(onClick = { viewModel.resetCustomizationResource("background") }, enabled = state.customization.backgroundPath.isNotBlank() && state.customization.backgroundIsVideo) {
-                        Icon(Icons.Default.Refresh, "恢复默认")
-                    }
-                },
-                onClick = { videoPicker.launch(arrayOf("video/mp4", "video/webm")) },
+                title = "Live2D 模型",
+                description = "导入、切换与调整 Live2D 角色",
+                showChevron = true,
+                onClick = onOpenLive2d,
             )
         }
-        Group("按天气覆盖背景") {
-            listOf("clear" to "晴天", "cloudy" to "多云/阴天", "rain" to "雨天", "snow" to "雪天", "fog" to "雾天", "thunder" to "雷暴").forEach { (key, label) ->
-                val hasCustomBackground = !state.customization.weatherBackgrounds[key].isNullOrBlank()
-                Entry(
-                    title = label,
-                    trailingText = if (hasCustomBackground) "已设置" else null,
-                    trailing = {
-                        IconButton(onClick = { viewModel.resetCustomizationResource("weather_$key") }, enabled = hasCustomBackground) {
-                            Icon(Icons.Default.Refresh, "恢复默认")
-                        }
-                    },
-                    onClick = {
-                        pendingWeatherBackground = "weather_$key"
-                        weatherBackgroundPicker.launch(arrayOf("image/*"))
-                    },
-                )
+        Group("重置") {
+            TextButton(
+                onClick = viewModel::resetCustomization,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(40.dp),
+                shape = RoundedCornerShape(20.dp),
+                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 0.dp),
+            ) {
+                Text("恢复默认外观")
             }
         }
+    }
+    pendingImageEdit?.let { pending ->
+        ImageCropDialog(
+            pending = pending,
+            onDismiss = { pendingImageEdit = null },
+            onConfirm = { bitmap ->
+                viewModel.importEditedImage(bitmap, pending.kind)
+                pendingImageEdit = null
+            },
+        )
+    }
+}
+
+@Composable
+private fun Live2dPage(
+    state: MainUiState,
+    viewModel: MainViewModel,
+    onOpenEditor: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val live2dPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { it?.let(viewModel::importLive2d) }
+    SettingsPanel(modifier) {
         Group("Live2D") {
             NoteRow("实验性功能，可能会造成卡顿", isError = true)
             SwitchRow(
@@ -2785,23 +3061,6 @@ private fun AppearancePage(
                 )
             }
         }
-        Group("重置") {
-            ActionRow(
-                label = "恢复默认外观",
-                onClick = viewModel::resetCustomization,
-                emphasis = ActionEmphasis.TEXT,
-            )
-        }
-    }
-    pendingImageEdit?.let { pending ->
-        ImageCropDialog(
-            pending = pending,
-            onDismiss = { pendingImageEdit = null },
-            onConfirm = { bitmap ->
-                viewModel.importEditedImage(bitmap, pending.kind)
-                pendingImageEdit = null
-            },
-        )
     }
 }
 

@@ -39,6 +39,9 @@ import com.neko.weather.data.AiProfileStore
 import com.neko.weather.data.ProviderProfileStore
 import com.neko.weather.data.BackupManager
 import com.neko.weather.data.ApiUsageTracker
+import com.neko.weather.data.AppearancePresetStore
+import com.neko.weather.model.AppearancePresets
+import com.neko.weather.model.ThemeSettings
 import com.neko.weather.model.ProviderProfiles
 import com.neko.weather.model.WeatherProviderProfile
 import com.neko.weather.model.AirProviderProfile
@@ -78,6 +81,8 @@ data class MainUiState(
     val aiLoading: Boolean = false,
     val providerProfiles: ProviderProfiles = defaultProviderProfiles(),
     val displaySettings: DisplaySettings = DisplaySettings(),
+    val themeSettings: ThemeSettings = ThemeSettings(),
+    val appearancePresets: AppearancePresets = AppearancePresets(),
 )
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
@@ -95,6 +100,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val providerProfileStore = ProviderProfileStore(application)
     private val aiProfileStore = AiProfileStore(application)
     private val backupManager = BackupManager(application)
+    private val appearancePresetStore = AppearancePresetStore(application)
 
     private val initialConfig = store.loadWeatherConfig().also {
         ApiUsageTracker.registerProvider(it.endpoint, it.displayName)
@@ -122,6 +128,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             aiProfiles = aiProfileStore.load(store.loadAiSettings()),
             providerProfiles = providerProfileStore.load(initialConfig),
             displaySettings = store.loadDisplaySettings(),
+            themeSettings = store.loadThemeSettings(),
+            appearancePresets = appearancePresetStore.load(),
         ),
     )
     val state = _state.asStateFlow()
@@ -607,6 +615,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         refreshSettings = store.loadWeatherRefreshSettings(),
                         aiProfiles = aiProfileStore.load(store.loadAiSettings()),
                         displaySettings = store.loadDisplaySettings(),
+                        themeSettings = store.loadThemeSettings(),
+                        appearancePresets = appearancePresetStore.load(),
                         savedCities = cityStore.load(),
                         providerProfiles = providerProfileStore.load(config),
                         message = "还原完成",
@@ -649,7 +659,117 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun resetCustomization() {
-        _state.update { it.copy(customization = customizationManager.reset(), message = "已恢复默认外观") }
+        _state.update {
+            it.copy(
+                customization = customizationManager.reset(),
+                appearancePresets = appearancePresetStore.clearSelection(),
+                message = "已恢复默认外观",
+            )
+        }
+    }
+
+    fun updateThemeSettings(settings: ThemeSettings) {
+        store.saveThemeSettings(settings)
+        _state.update { it.copy(themeSettings = settings) }
+    }
+
+    fun applyAppearancePreset(id: String) {
+        val preset = _state.value.appearancePresets.presets.firstOrNull { it.id == id } ?: return
+        runCatching { appearancePresetStore.apply(preset) }
+            .onSuccess { presets ->
+                _state.update {
+                    it.copy(
+                        appearancePresets = presets,
+                        customization = customizationManager.load(),
+                        message = "已切换外观预设：${preset.name}",
+                    )
+                }
+            }
+            .onFailure { error -> _state.update { it.copy(message = error.message ?: "切换预设失败") } }
+    }
+
+    /** 以当前生效外观为内容新建预设，返回新预设 ID 供跳转编辑。 */
+    fun createAppearancePreset(): String? {
+        return runCatching { appearancePresetStore.createFromCurrent("新预设") }
+            .onSuccess { presets -> _state.update { it.copy(appearancePresets = presets) } }
+            .map { it.presets.lastOrNull()?.id }
+            .getOrNull()
+    }
+
+    fun renameAppearancePreset(id: String, name: String) {
+        _state.update {
+            it.copy(appearancePresets = appearancePresetStore.rename(id, name), message = "预设已重命名")
+        }
+    }
+
+    fun deleteAppearancePresets(ids: Set<String>) {
+        if (ids.isEmpty()) return
+        val before = _state.value.appearancePresets.presets.size
+        runCatching { appearancePresetStore.delete(ids) }
+            .onSuccess { presets ->
+                _state.update {
+                    it.copy(
+                        appearancePresets = presets,
+                        customization = customizationManager.load(),
+                        message = "已删除 ${before - presets.presets.size} 个预设",
+                    )
+                }
+            }
+            .onFailure { error -> _state.update { it.copy(message = error.message ?: "删除预设失败") } }
+    }
+
+    fun importAppearancePreset(uri: android.net.Uri) {
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching { appearancePresetStore.importPreset(uri) }
+                .onSuccess { presets -> _state.update { it.copy(appearancePresets = presets, message = "预设已导入") } }
+                .onFailure { error -> _state.update { it.copy(message = error.message ?: "预设导入失败") } }
+        }
+    }
+
+    fun exportAppearancePreset(id: String, uri: android.net.Uri) {
+        val preset = _state.value.appearancePresets.presets.firstOrNull { it.id == id } ?: return
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching { appearancePresetStore.exportPreset(preset, uri) }
+                .onSuccess { _state.update { it.copy(message = "预设已导出") } }
+                .onFailure { error -> _state.update { it.copy(message = error.message ?: "预设导出失败") } }
+        }
+    }
+
+    fun importPresetResource(presetId: String, uri: android.net.Uri, kind: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching { appearancePresetStore.importResource(presetId, uri, kind) }
+                .onSuccess { presets ->
+                    _state.update {
+                        it.copy(appearancePresets = presets, customization = customizationManager.load(), message = "外观资源已应用")
+                    }
+                }
+                .onFailure { error -> _state.update { it.copy(message = error.message ?: "资源导入失败") } }
+        }
+    }
+
+    fun importPresetEditedImage(bitmap: android.graphics.Bitmap, presetId: String, kind: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val result = runCatching { appearancePresetStore.importBitmap(presetId, bitmap, kind) }
+            result.onSuccess { presets ->
+                bitmap.recycle()
+                _state.update {
+                    it.copy(appearancePresets = presets, customization = customizationManager.load(), message = "图片已裁切并应用")
+                }
+            }.onFailure { error ->
+                bitmap.recycle()
+                _state.update { it.copy(message = error.message ?: "图片保存失败") }
+            }
+        }
+    }
+
+    fun resetPresetResource(presetId: String, kind: String) {
+        runCatching { appearancePresetStore.resetResource(presetId, kind) }
+            .onSuccess { presets ->
+                _state.update {
+                    it.copy(appearancePresets = presets, customization = customizationManager.load(), message = "已恢复默认资源")
+                }
+            }
+            .onFailure { error -> _state.update { it.copy(message = error.message ?: "恢复默认失败") } }
     }
 
     fun speakWeather() {
