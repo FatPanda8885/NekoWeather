@@ -210,9 +210,11 @@ class WeatherRepository(
         val hourlyJson = json.optJSONObject("hourly")
         val hourly = if (hourlyJson == null) emptyList() else {
             val times = hourlyJson.optJSONArray("time")
-            val currentTime = currentJson?.optString("time").orEmpty()
+            // 截断到整点再比较：current.time 带分钟（如 14:35）时逐字符串比较会跳过
+            // 当前整点小时，逐小时条带便从「现在」直接跳到两小时后。
+            val currentHour = currentJson?.optString("time").orEmpty().take(13)
             val start = (0 until (times?.length() ?: 0))
-                .firstOrNull { times?.optString(it).orEmpty() >= currentTime }
+                .firstOrNull { times?.optString(it).orEmpty().take(13) >= currentHour }
                 ?: 0
             (start until minOf(start + 24, times?.length() ?: 0)).mapNotNull { index ->
                 val temperature = hourlyJson.arrayNumber("temperature_2m", index) ?: return@mapNotNull null

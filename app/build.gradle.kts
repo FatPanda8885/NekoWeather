@@ -62,6 +62,7 @@ android {
     kotlinOptions.jvmTarget = "17"
 
     buildFeatures.compose = true
+    buildFeatures.buildConfig = true
 
     val hasCubismSdk = rootProject.findProject(":cubismFramework") != null
     sourceSets["main"].java.srcDir(if (hasCubismSdk) "src/cubism/java" else "src/lite/java")

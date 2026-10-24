@@ -19,6 +19,13 @@ private fun toEnglish(source: String): String {
 }
 
 private val ENGLISH_REPLACEMENTS = listOf(
+    "推送测试通知" to "Send test notification",
+    "立即发送一条测试通知，用于验证通知通道" to "Posts one notification immediately to verify the channel",
+    "开发" to "Developer",
+    "以下入口只出现在开发构建中" to "These entries only appear in debug builds",
+    "通知测试" to "Notification test",
+    "看到这条通知，说明通知通道工作正常。" to "If you can see this notification, the channel is working.",
+    "系统语音播报失败，请在系统设置中检查 TTS 引擎与中文语音数据" to "TTS playback failed. Check the system TTS engine and Chinese voice data in system settings.",
     "Live2D 模型" to "Live2D models",
     "导入、切换与调整 Live2D 角色" to "Import, switch and adjust Live2D characters",
     "搜索时区" to "Search time zones",
@@ -667,6 +674,13 @@ private fun toJapanese(source: String): String {
 }
 
 private val JAPANESE_REPLACEMENTS = listOf(
+    "推送测试通知" to "テスト通知を送信",
+    "立即发送一条测试通知，用于验证通知通道" to "通知チャネルを確認するため、すぐに通知を 1 件送信します",
+    "开发" to "開発",
+    "以下入口只出现在开发构建中" to "以下の項目は開発ビルドのみに表示されます",
+    "通知测试" to "通知テスト",
+    "看到这条通知，说明通知通道工作正常。" to "この通知が見えれば、通知チャネルは正常に動作しています。",
+    "系统语音播报失败，请在系统设置中检查 TTS 引擎与中文语音数据" to "音声読み上げに失敗しました。システム設定で TTS エンジンと中国語音声データを確認してください。",
     "Live2D 模型" to "Live2D モデル",
     "导入、切换与调整 Live2D 角色" to "Live2D モデルの導入・切り替え・調整",
     "搜索时区" to "タイムゾーンを検索",

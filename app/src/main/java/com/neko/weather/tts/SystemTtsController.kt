@@ -11,6 +11,8 @@ import java.util.Locale
 
 class SystemTtsController(context: Context) {
     private var ready = false
+    /** 引擎初始化成功但缺少中文语音数据时为 true，此时 speak 直接失败并提示用户。 */
+    private var chineseVoiceMissing = false
     private var pending: Pair<String, VoiceSettings>? = null
     private var tts: TextToSpeech? = null
 
@@ -18,14 +20,18 @@ class SystemTtsController(context: Context) {
         tts = TextToSpeech(context.applicationContext) { status ->
             ready = status == TextToSpeech.SUCCESS
             if (ready) {
+                // USAGE_MEDIA 而非 ASSISTANT：部分 OEM（如 Oplus）把 Assistant 流路由到
+                // 默认静音的通道，导致「播放成功」却听不到声音。
                 tts?.setAudioAttributes(
                     AudioAttributes.Builder()
-                        .setUsage(AudioAttributes.USAGE_ASSISTANT)
+                        .setUsage(AudioAttributes.USAGE_MEDIA)
                         .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
                         .build(),
                 )
                 val languageResult = tts?.setLanguage(Locale.SIMPLIFIED_CHINESE)
-                if (languageResult == TextToSpeech.LANG_MISSING_DATA || languageResult == TextToSpeech.LANG_NOT_SUPPORTED) {
+                chineseVoiceMissing = languageResult == TextToSpeech.LANG_MISSING_DATA ||
+                    languageResult == TextToSpeech.LANG_NOT_SUPPORTED
+                if (chineseVoiceMissing) {
                     tts?.language = Locale.getDefault()
                 }
                 tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
@@ -52,12 +58,15 @@ class SystemTtsController(context: Context) {
         val engine = tts ?: return false
         if (engine.setSpeechRate(settings.rate) == TextToSpeech.ERROR) return false
         if (engine.setPitch(settings.pitch) == TextToSpeech.ERROR) return false
+        // 不再附加 KEY_PARAM_STREAM：设置了 AudioAttributes 后流参数会被忽略，且部分
+        // OEM 实现里两者并存会走异常分支。
         val parameters = Bundle().apply {
             putFloat(TextToSpeech.Engine.KEY_PARAM_VOLUME, 1f)
-            putInt(TextToSpeech.Engine.KEY_PARAM_STREAM, android.media.AudioManager.STREAM_MUSIC)
         }
         return engine.speak(text, TextToSpeech.QUEUE_FLUSH, parameters, "weather-${System.currentTimeMillis()}") == TextToSpeech.SUCCESS
     }
+
+    fun isChineseVoiceMissing(): Boolean = chineseVoiceMissing
 
     fun stop() {
         CubismSignals.setSpeaking(false)

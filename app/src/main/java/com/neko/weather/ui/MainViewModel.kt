@@ -47,6 +47,7 @@ import com.neko.weather.model.WeatherProviderProfile
 import com.neko.weather.model.AirProviderProfile
 import com.neko.weather.model.AlertProviderProfile
 import com.neko.weather.model.defaultProviderProfiles
+import com.neko.weather.notification.WeatherNotificationPublisher
 import com.neko.weather.notification.WeatherNotificationScheduler
 import com.neko.weather.tts.SystemTtsController
 import com.neko.weather.tts.VoiceModelManager
@@ -159,6 +160,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     if (generation == refreshGeneration) {
                         store.saveLastWeatherUpdateMillis(weather.current.fetchedAtMillis)
                         weatherCache.save(config, weather)
+                        // 前台刷新也走通知判定：部分 ROM 会大幅推迟周期 Job，共用发布器
+                        // 与去重键保证使用期间通知照常到期
+                        runCatching { WeatherNotificationPublisher.publish(getApplication(), weather) }
                         _state.update { it.copy(weather = weather, loading = false) }
                     }
                 }
@@ -793,7 +797,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             append("。")
         }
         if (!systemTts.speak(text, _state.value.voiceSettings)) {
-            _state.update { it.copy(message = "系统语音引擎不可用，请在系统设置中安装或启用 TTS 引擎") }
+            _state.update { it.copy(message = "系统语音播报失败，请在系统设置中检查 TTS 引擎与中文语音数据") }
         }
     }
 
