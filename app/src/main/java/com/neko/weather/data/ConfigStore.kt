@@ -170,7 +170,11 @@ class ConfigStore(context: Context) {
     fun loadThemeSettings() = ThemeSettings(
         mode = ThemeSettings.modeFromName(get("themeMode", ThemeMode.AUTO.name)),
         useDynamicColor = preferences.getBoolean("themeDynamicColor", false),
-        seedColorValue = runCatching { get("themeSeedColor", "ff3568d4").toLong(16) }.getOrDefault(0xFF3568D4),
+        // 兼容旧版本误存的打包值（超出 ARGB 范围或透明色）时回退默认主题色
+        seedColorValue = runCatching { get("themeSeedColor", "ff3568d4").toLong(16) }
+            .getOrDefault(0xFF3568D4)
+            .takeIf { it in 1..0xFFFFFFFFL && it ushr 24 != 0L }
+            ?: 0xFF3568D4,
     )
 
     fun saveThemeSettings(settings: ThemeSettings) {

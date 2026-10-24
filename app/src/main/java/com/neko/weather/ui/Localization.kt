@@ -19,6 +19,12 @@ private fun toEnglish(source: String): String {
 }
 
 private val ENGLISH_REPLACEMENTS = listOf(
+    "使用定位选择时区" to "Pick time zone by location",
+    "正在定位…" to "Locating…",
+    "已定位：" to "Located: ",
+    "定位权限被拒绝，点击重试" to "Location permission denied, tap to retry",
+    "定位失败，点击重试" to "Location failed, tap to retry",
+    "未找到匹配的时区" to "No matching time zone found",
     // ---- 主题色彩 / 外观预设 / 时区（settings-ui 分支新增） ----
     "主题色彩" to "Theme & colors",
     "深浅模式、动态取色、主题色与外观预设" to "Light/dark mode, dynamic color, theme palette and appearance presets",
@@ -651,6 +657,12 @@ private fun toJapanese(source: String): String {
 }
 
 private val JAPANESE_REPLACEMENTS = listOf(
+    "使用定位选择时区" to "現在地からタイムゾーンを選択",
+    "正在定位…" to "測位中…",
+    "已定位：" to "測位結果：",
+    "定位权限被拒绝，点击重试" to "位置情報の権限が拒否されました。タップで再試行",
+    "定位失败，点击重试" to "測位に失敗しました。タップで再試行",
+    "未找到匹配的时区" to "一致するタイムゾーンが見つかりません",
     // ---- 主题色彩 / 外观预设 / 时区（settings-ui 分支新增） ----
     "主题色彩" to "テーマと色",
     "主题模式" to "テーマモード",

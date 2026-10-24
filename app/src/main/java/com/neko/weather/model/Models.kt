@@ -167,9 +167,10 @@ enum class ThemeMode { LIGHT, DARK, AUTO }
 data class ThemeSettings(
     val mode: ThemeMode = ThemeMode.AUTO,
     val useDynamicColor: Boolean = false,
+    /** ARGB 颜色值（0xAARRGGBB），经 toArgb 往返以保证与色板颜色可比。 */
     val seedColorValue: Long = 0xFF3568D4,
 ) {
-    val seedColor: Color get() = Color(seedColorValue)
+    val seedColor: Color get() = Color(seedColorValue.toInt())
 
     companion object {
         fun modeFromName(raw: String): ThemeMode =

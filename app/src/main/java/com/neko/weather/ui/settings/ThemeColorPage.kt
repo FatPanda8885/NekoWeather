@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
@@ -49,6 +50,7 @@ import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.graphics.toArgb
 import com.materialkolor.hct.Hct
 import com.materialkolor.ktx.toHct
 import com.materialkolor.rememberDynamicColorScheme
@@ -98,7 +100,7 @@ internal fun ThemeColorPage(
                     selectedColor = theme.seedColor.takeUnless { theme.useDynamicColor },
                     onSelect = { color ->
                         viewModel.updateThemeSettings(
-                            ThemeSettings(mode = theme.mode, useDynamicColor = false, seedColorValue = color.value.toLong()),
+                            ThemeSettings(mode = theme.mode, useDynamicColor = false, seedColorValue = color.toArgb().toLong()),
                         )
                     },
                     modifier = Modifier.fillMaxWidth().padding(vertical = 10.dp),
@@ -141,7 +143,7 @@ private fun ThemeModeSelectPanel(
                     role = Role.RadioButton,
                     onClick = { onModeSelected(mode) },
                 ),
-                horizontalAlignment = Alignment.Start,
+                horizontalAlignment = Alignment.CenterHorizontally,
             ) {
                 if (mode == ThemeMode.AUTO) {
                     DiagonalMixedPreviewPanel(seedColor, panelModifier)
@@ -151,8 +153,10 @@ private fun ThemeModeSelectPanel(
                         modifier = panelModifier,
                     )
                 }
+                Spacer(Modifier.height(6.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     RadioButton(selected = selected, onClick = null)
+                    Spacer(Modifier.width(4.dp))
                     Text(modeLabel(mode), fontSize = 13.sp)
                 }
             }
