@@ -23,6 +23,7 @@ import com.neko.weather.data.WeatherRepository
 import com.neko.weather.model.WeatherDashboard
 import com.neko.weather.model.TemperatureUnit
 import com.neko.weather.ui.localizedText
+import com.neko.weather.data.AppTimeZone
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -108,11 +109,12 @@ class WeatherNotificationJobService : JobService() {
         if (Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) return
         val settings = store.loadNotificationSettings()
         val display = store.loadDisplaySettings()
+        val zone = AppTimeZone.resolve(display.timeZoneId)
         val unit = display.temperatureUnit
         fun l(value: String) = localizedText(value, display.language)
         val prefs = getSharedPreferences("notification_history", MODE_PRIVATE)
-        val now = LocalDateTime.now()
-        val today = LocalDate.now().toString()
+        val now = LocalDateTime.now(zone)
+        val today = LocalDate.now(zone).toString()
 
         if (settings.morningEnabled && now.hour in 6..10 && prefs.getString("morning", "") != today) {
             val current = weather.current

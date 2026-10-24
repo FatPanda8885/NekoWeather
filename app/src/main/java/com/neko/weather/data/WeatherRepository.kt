@@ -102,6 +102,8 @@ class WeatherRepository(
             visibility = now.optString("vis").toDoubleOrNull(),
             observationTime = observationTime,
             solarElevation = calculateSolarElevation(observationTime.orEmpty(), config.latitude.toDoubleOrNull(), config.longitude.toDoubleOrNull(), utcOffsetSeconds),
+            // 记录所在地时区（固定偏移形式），供显示时区换算使用
+            timezone = java.time.ZoneOffset.ofTotalSeconds(utcOffsetSeconds).id.takeIf { observationTime != null },
         )
         val hourlyArray = hourlyRoot.optJSONArray("hourly")
         val hourly = (0 until minOf(24, hourlyArray?.length() ?: 0)).mapNotNull { index ->

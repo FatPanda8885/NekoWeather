@@ -10,6 +10,8 @@ import com.neko.weather.model.TemperatureUnit
 import com.neko.weather.model.WeatherRefreshSettings
 import com.neko.weather.model.AiSettings
 import com.neko.weather.model.DEFAULT_AI_REQUEST_JSON
+import com.neko.weather.model.ThemeMode
+import com.neko.weather.model.ThemeSettings
 
 class ConfigStore(context: Context) {
     init { ApiUsageTracker.initialize(context) }
@@ -153,6 +155,7 @@ class ConfigStore(context: Context) {
         language = runCatching {
             com.neko.weather.model.AppLanguage.valueOf(get("appLanguage", com.neko.weather.model.AppLanguage.SIMPLIFIED_CHINESE.name))
         }.getOrDefault(com.neko.weather.model.AppLanguage.SIMPLIFIED_CHINESE),
+        timeZoneId = get("timeZoneId", ""),
     )
 
     fun saveDisplaySettings(settings: DisplaySettings) {
@@ -160,6 +163,21 @@ class ConfigStore(context: Context) {
             .putString("temperatureUnit", settings.temperatureUnit.name)
             .putString("windSpeedUnit", settings.windSpeedUnit.name)
             .putString("appLanguage", settings.language.name)
+            .putString("timeZoneId", settings.timeZoneId)
+            .apply()
+    }
+
+    fun loadThemeSettings() = ThemeSettings(
+        mode = ThemeSettings.modeFromName(get("themeMode", ThemeMode.AUTO.name)),
+        useDynamicColor = preferences.getBoolean("themeDynamicColor", false),
+        seedColorValue = runCatching { get("themeSeedColor", "ff3568d4").toLong(16) }.getOrDefault(0xFF3568D4),
+    )
+
+    fun saveThemeSettings(settings: ThemeSettings) {
+        preferences.edit()
+            .putString("themeMode", settings.mode.name)
+            .putBoolean("themeDynamicColor", settings.useDynamicColor)
+            .putString("themeSeedColor", settings.seedColorValue.toString(16))
             .apply()
     }
 
