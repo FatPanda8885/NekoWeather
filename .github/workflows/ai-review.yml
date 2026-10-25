@@ -423,8 +423,10 @@ jobs:
           : > qa/walkthrough-result.txt
           PKG=com.neko.weather
           APK=""
-          # 设置根页的可见标记（分组标题 + 入口），用来判断"现在是不是在设置根页"
-          SETTINGS_MARKER='应用与界面|数据与网络|外观与主题|显示与更新|AI 天气建议|通知提醒|备份与还原'
+          # 设置根页标记 = 页面标题「设置」+ 两个分组标题。
+          # 只匹配 text 属性（texts-only），因为 dashboard 的设置图标 content-desc 也叫「设置」；
+          # 入口名不能用作标记 —— 二级页的标题恰好就是入口名（外观与主题 / 语音与音色 …），会误判。
+          SETTINGS_MARKER='设置|应用与界面|数据与网络'
 
           for f in app/build/outputs/apk/debug/app-x86_64-debug.apk \
                    app/build/outputs/apk/debug/*x86_64*.apk \
@@ -452,6 +454,12 @@ jobs:
           # uiautomator 辅助脚本：零面积过滤 + content-desc 优先 + 可点击祖先 + 顶部栏最右兜底 + 界面指纹
           cat > "$WORK/ui.py" <<'PY'
           import os, re, sys, xml.etree.ElementTree as ET
+
+          # 输出固定 UTF-8：否则在某些 locale（如 GBK 控制台）下中文文案会和 UTF-8 的匹配串对不上
+          try:
+              sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+          except Exception:
+              pass
 
           BOUNDS = re.compile(r"\[(-?\d+),(-?\d+)\]\[(-?\d+),(-?\d+)\]")
           MIN_SIZE = 2  # 宽或高 <= 2px 视为零面积节点：accessibility 上点不到，一律跳过
@@ -597,17 +605,35 @@ jobs:
               return str(len(clickable)) + "c|" + ";".join(clickable) + "|" + ";".join(texts)
 
 
-          def cmd_texts(path):
+          def cmd_texts(path, only_text=False):
               root = load(path)
               if root is None:
                   return 1
               seen = []
               for node, _ in walk(root, []):
-                  label = (node.get("text") or node.get("content-desc") or "").strip()
+                  if only_text:
+                      label = (node.get("text") or "").strip()
+                  else:
+                      label = (node.get("text") or node.get("content-desc") or "").strip()
                   if label and label not in seen:
                       seen.append(label)
               sys.stdout.write(" | ".join(seen)[:1500] + "\n")
               return 0
+
+
+          def cmd_contains(path, pattern, text_only=True):
+              root = load(path)
+              if root is None:
+                  return 1
+              rx = re.compile(pattern, re.I)
+              for node, _ in walk(root, []):
+                  if text_only:
+                      label = node.get("text") or ""
+                  else:
+                      label = (node.get("text") or "") + " " + (node.get("content-desc") or "")
+                  if label.strip() and rx.search(label):
+                      return 0
+              return 1
 
 
           def main(argv):
@@ -623,6 +649,12 @@ jobs:
                   return 0
               if command == "texts":
                   return cmd_texts(path)
+              if command == "texts-only":
+                  return cmd_texts(path, only_text=True)
+              if command == "contains-text" and len(argv) >= 4:
+                  return cmd_contains(path, argv[3], text_only=True)
+              if command == "contains" and len(argv) >= 4:
+                  return cmd_contains(path, argv[3], text_only=False)
               return 2
 
 
@@ -650,6 +682,11 @@ jobs:
 
           texts() {
             python3 "$WORK/ui.py" texts "$WORK/dump.xml" 2>/dev/null || true
+          }
+
+          # 只取 text 属性（不含 content-desc），用于判断"是不是设置根页"
+          texts_only() {
+            python3 "$WORK/ui.py" texts-only "$WORK/dump.xml" 2>/dev/null || true
           }
 
           shot() {
@@ -773,27 +810,82 @@ jobs:
             tap_progress "reenter-settings" '@scrollup' '设置' 'Settings' '@rightmost-top'
           }
 
+          # 是否已在设置根页：先看当前视口，再滚回顶部看两次（根页可能被滚动过）
+          at_settings_root() {
+            local attempt
+            for attempt in 1 2 3; do
+              dump || return 1
+              # 用 python 匹配（ui.py contains-text）而不是 grep：
+              # 跨进程管道的编码不可控，中文匹配串在某些 locale 下会与输出编码不一致
+              if python3 "$WORK/ui.py" contains-text "$WORK/dump.xml" "$SETTINGS_MARKER"; then
+                return 0
+              fi
+              adb -s "$SERIAL" shell input swipe 540 700 540 1900 300 >/dev/null 2>&1
+              sleep 1
+            done
+            return 1
+          }
+
+          # 回到设置根页：最多 3 次 back，每轮都把判定写进 qa/device/back-NN.log；
+          # 任何一次 back 退出应用、或 3 次 back 都没回到根页，都兜底
+          # am start 回首页 + 重新点设置图标；这条兜底也失败才判失败。
           back_to_settings() {
             local i
+            : > "$WORK/back-$API.log"
             for i in 1 2 3; do
-              dump || true
-              if texts | grep -qE "$SETTINGS_MARKER"; then
-                echo "  已在设置根页"
+              if at_settings_root; then
+                {
+                  echo "== 第 $i 轮"
+                  echo "前台: $(adb -s "$SERIAL" shell dumpsys window 2>/dev/null | grep -m1 'mCurrentFocus' | tr -d '\r')"
+                  echo "判定: 已在设置根页"
+                  echo "dump 文本: $(texts_only)"
+                } >> "$WORK/back-$API.log"
+                echo "  已在设置根页（第 $i 轮判定命中）" | tee -a "$WORK/back-$API.log"
                 return 0
               fi
+              {
+                echo "== 第 $i 轮"
+                echo "前台: $(adb -s "$SERIAL" shell dumpsys window 2>/dev/null | grep -m1 'mCurrentFocus' | tr -d '\r')"
+                echo "判定: 不是设置根页，按 back"
+                echo "dump 文本: $(texts_only)"
+              } >> "$WORK/back-$API.log"
+              echo "  第 $i 轮：当前界面不是设置根页，按一次 back" | tee -a "$WORK/back-$API.log"
               back
               if ! foreground_ok; then
-                echo "  back 退出了应用（$LAST_FOCUS），am start 拉回后重新进入设置"
-                if ! reenter_settings; then
-                  TIER_ABORT=1
-                  echo "android-$API status=wrong-app stage=reenter" >> qa/walkthrough-result.txt
-                  return 1
-                fi
-                return 0
+                echo "  第 $i 轮：back 退出了应用（$LAST_FOCUS），am start 拉回并重新进入设置" | tee -a "$WORK/back-$API.log"
+                if reenter_settings; then return 0; fi
+                echo "::warning::am start 拉回 + 重新进入设置失败" | tee -a "$WORK/back-$API.log"
+                return 1
               fi
             done
-            echo "::warning::3 次 back 之后仍没回到设置根页"
+            echo "  3 次 back 仍未回到设置根页，兜底 am start 回首页后重新进入设置" | tee -a "$WORK/back-$API.log"
+            if reenter_settings; then return 0; fi
+            echo "::warning::3 次 back 与 am start 兜底都失败，判定 back-to-settings-failed" | tee -a "$WORK/back-$API.log"
             return 1
+          }
+
+          # 把因 back_to_settings 失败而没跑的步骤如实记下来（不允许静默跳过）
+          mark_not_run() {
+            local reason="$1"; shift
+            local s
+            for s in "$@"; do
+              echo "$s nav=not-run reason=$reason" >> qa/walkthrough-result.txt
+              echo "!! 跳过 $s（reason=$reason）"
+            done
+          }
+
+          # 回到设置根页后跑一步；回不去就把这一步记成 not-run
+          run_after_back_to_settings() {
+            local name="$1"; shift
+            if [ "$TIER_ABORT" -ne 0 ]; then
+              echo "$name nav=aborted status=skipped" >> qa/walkthrough-result.txt
+              return 0
+            fi
+            if back_to_settings; then
+              walk_screen "$name" "$@"
+            else
+              mark_not_run back-to-settings-failed "$name"
+            fi
           }
 
           walk_screen() {
@@ -832,7 +924,7 @@ jobs:
 
           # 每档汇总：no-progress / wrong-app 一律降级，绝不报 ok
           summarize_tier() {
-            local api="$1" crash shots noprogress wrongapp names status
+            local api="$1" crash shots noprogress notrun wrongapp names rnames status
             if [ -f "qa/logcat-api$api.txt" ]; then
               crash=$(wc -l < "qa/logcat-api$api.txt")
             else
@@ -844,20 +936,28 @@ jobs:
             [ -n "$noprogress" ] || noprogress=0
             wrongapp=$(grep -c "api$api-.*nav=wrong-app" qa/walkthrough-result.txt 2>/dev/null)
             [ -n "$wrongapp" ] || wrongapp=0
+            notrun=$(grep -c "api$api-.*nav=not-run" qa/walkthrough-result.txt 2>/dev/null)
+            [ -n "$notrun" ] || notrun=0
             names=$(grep "api$api-.*nav=no-progress" qa/walkthrough-result.txt 2>/dev/null \
               | awk '{print $1}' | tr '\n' ' ' | sed 's/ *$//')
             [ -n "$names" ] || names=none
+            rnames=$(grep "api$api-.*nav=not-run" qa/walkthrough-result.txt 2>/dev/null \
+              | awk '{print $1}' | tr '\n' ' ' | sed 's/ *$//')
+            [ -n "$rnames" ] || rnames=none
             if [ "$wrongapp" -gt 0 ]; then
               status=wrong-app
             elif [ "$crash" -gt 0 ]; then
               status=crash-lines
             elif [ "$noprogress" -gt 0 ]; then
               status=degraded
+            elif [ "$notrun" -gt 0 ]; then
+              status=degraded-not-run
             else
               status=ok
             fi
-            echo "android-$api status=$status shots=$shots no_progress_steps=$noprogress crash_lines=$crash"
+            echo "android-$api status=$status shots=$shots no_progress_steps=$noprogress not_run_steps=$notrun crash_lines=$crash"
             echo "android-$api no_progress_screens=$names"
+            echo "android-$api not_run_screens=$rnames"
           }
 
           # 首启覆盖层预处理：debug 包允许 run-as，写入 onboardingCompleted=true 直接进首页。
@@ -888,6 +988,8 @@ jobs:
           for API in 30 35; do
             AVD="neribot-api$API"
             TIER_ABORT=0
+            # 清掉上一轮残留的截图，避免 summarize_tier 的 shots 计数把历史文件算进来
+            rm -f "$OUT"/api$API-*.png 2>/dev/null || true
             echo "############ android-$API ($AVD) ############"
             if ! start_out=$(/usr/local/bin/neribot-emulator.sh start "$API" 2>&1); then
               echo "$start_out"
@@ -934,7 +1036,7 @@ jobs:
             walk_screen "api$API-01-home"
 
             # 首启覆盖层仍在 = 预处理失败，按环境问题记录，不再盲点
-            if dump && texts | grep -qE 'Choose your language|选择你的语言|言語を選択|言語の選択'; then
+            if dump && python3 "$WORK/ui.py" contains "$WORK/dump.xml"                  'Choose your language|选择你的语言|言語を選択|言語の選択'; then
               echo "::warning::android-$API 首启覆盖层仍然存在，按环境问题处理，不继续盲点"
               echo "android-$API status=onboarding-blocked" >> qa/walkthrough-result.txt
               shot "api$API-02-onboarding-blocked"
@@ -952,31 +1054,29 @@ jobs:
             # 设置 -> 外观与主题 -> 主题色彩
             walk_screen "api$API-04-appearance" '外观与主题'
             walk_screen "api$API-05-theme-color" '主题色彩'
-            # 回到设置根页 -> 显示与更新 -> 时区
+            # 回到设置根页 -> 显示与更新 -> 时区（这两步共用一次回根页；回不去就都记 not-run）
             if back_to_settings; then
               walk_screen "api$API-06-display-refresh" '显示与更新'
               walk_screen "api$API-07-timezone" '时区'
+            else
+              mark_not_run back-to-settings-failed \
+                "api$API-06-display-refresh" "api$API-07-timezone"
             fi
             # 回到设置根页 -> 语音与音色
-            if back_to_settings; then
-              walk_screen "api$API-08-voice" '语音与音色'
-            fi
+            run_after_back_to_settings "api$API-08-voice" '语音与音色'
             # 回到设置根页 -> 天气数据供应商
-            if back_to_settings; then
-              walk_screen "api$API-09-providers" '天气数据供应商'
-            fi
+            run_after_back_to_settings "api$API-09-providers" '天气数据供应商'
             # 回到设置根页 -> AI 天气建议
-            if back_to_settings; then
-              walk_screen "api$API-10-ai-advice" 'AI 天气建议' '@scroll' 'AI 天气建议'
-            fi
+            run_after_back_to_settings "api$API-10-ai-advice" 'AI 天气建议' '@scroll' 'AI 天气建议'
             # 回到设置根页 -> 通知提醒（可能在下方分组，需要滚动）
-            if back_to_settings; then
-              walk_screen "api$API-11-notifications" '通知提醒' '@scroll' '通知提醒'
-            fi
+            run_after_back_to_settings "api$API-11-notifications" '通知提醒' '@scroll' '通知提醒'
             # 回到设置根页 -> 关于 -> 隐私政策（法律文档）
             if back_to_settings; then
               walk_screen "api$API-12-about" '关于' '@scroll' '关于'
               walk_screen "api$API-13-legal-docs" '隐私政策' '用户使用协议'
+            else
+              mark_not_run back-to-settings-failed \
+                "api$API-12-about" "api$API-13-legal-docs"
             fi
 
             adb -s "$SERIAL" logcat -d -v threadtime 2>/dev/null \
@@ -1067,9 +1167,11 @@ jobs:
             echo "    看到 pixel_status=verify-no-tests / capture-no-tests 说明门禁没能真正执行，按环境问题写进报告，不要当成通过。"
             echo "真机走查（每档一行，status 就是走查可信度）："
             echo "$WALK"
-            echo "  status=ok 才是全部走通；status=degraded 表示有界面 no-progress（清单在 no_progress_screens= 里）；"
-            echo "  status=wrong-app 表示点击时前台已经不是本 app（已被前台校验拦下）；status=onboarding-blocked 表示首启预处理失败。"
-            echo "  只要不是 ok，就必须把没走通的界面数量与名称写进【环境与范围】，不允许把整段走查描述成成功。"
+            echo "  status=ok 才是全部走通；status=degraded 表示有界面 no-progress（见 no_progress_screens=）；"
+            echo "  status=degraded-not-run 表示有界面因为回不到设置根页根本没跑（见 not_run_screens=）；"
+            echo "  status=wrong-app 表示点击时前台已经不是本 app（被前台校验拦下）；status=onboarding-blocked 表示首启预处理失败。"
+            echo "  只要不是 ok，就必须把没走通/没跑到的界面数量与名称写进【环境与范围】，不允许把整段走查描述成成功；"
+            echo "  其中 not_run_screens 非空时，还要单独说明那几个界面本次没有覆盖到，因此 approve 只能针对已覆盖的部分。"
             echo "logcat 致命错误/ANR：qa/logcat-api30.txt、qa/logcat-api35.txt"
             echo "已知缺陷（流水线在走查里实测到，必须原样写进【审阅发现】的 P2）："
             echo "$(cat qa/known-findings.txt 2>/dev/null || echo '（无）')"
