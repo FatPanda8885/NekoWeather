@@ -243,12 +243,16 @@ jobs:
           exit $build_status
 
       - name: Pixel baseline regression
-        # 两种模式显式判定：没有入库基线 -> 采集（成功）；有基线 -> 校验（差异即失败）
+        # 两种模式显式判定 + 强制重跑 + 「确实跑过测试」硬校验。
+        # 必须加 --rerun-tasks：Roborazzi 的基线 PNG 不是 Gradle 声明的任务输入，
+        # 只用 verifyRoborazziDebug --rerun 时依赖的 testDebugUnitTest 仍会被判 UP-TO-DATE，
+        # 结果就是基线被改了也 BUILD SUCCESSFUL（实测：--rerun 无效，--rerun-tasks 才真跑）。
         if: ${{ !cancelled() }}
         run: |
           set -uo pipefail
           BASELINE_DIR=app/src/test/screenshots
           ROBORAZZI_OUT=app/build/outputs/roborazzi
+          RESULTS_DIR=app/build/test-results/testDebugUnitTest
           CAND="$NERIBOT_UI_OUT_DIR/baseline-candidates"
           DIFF="$NERIBOT_UI_OUT_DIR/baseline-diff"
           mkdir -p qa "$CAND" "$DIFF"
@@ -257,46 +261,88 @@ jobs:
           if [ "$baseline_count" -eq 0 ]; then MODE=capture; else MODE=verify; fi
           echo "::notice::像素基线模式=$MODE（入库基线 $baseline_count 张）"
 
-          # 失败用例分类：只数 failure 元素（message 与 stack trace 会重复同一句话），
-          # 用 "was not found" 区分「基线文件不存在」与「像素真的不一致」
-          cat > qa/pixel-eval.py <<'PY'
-          import glob, xml.etree.ElementTree as ET
+          # 每次运行前清掉上一次的测试报告：没真跑就不会有新的 XML 可以数
+          STEP_START=$(date +%s)
+          rm -f "$RESULTS_DIR"/TEST-*.xml 2>/dev/null || true
 
-          total = 0
+          cat > qa/pixel-eval.py <<'PY'
+          import glob, os, sys, xml.etree.ElementTree as ET
+
+          # 输出：<tests> <failures> <missing_baseline_failures> <fresh_reports>
+          step_start = int(sys.argv[1]) if len(sys.argv) > 1 else 0
+          tests = 0
+          failures = 0
           missing = 0
+          fresh = 0
           for report in glob.glob("app/build/test-results/testDebugUnitTest/TEST-*.xml"):
               try:
+                  if step_start and int(os.path.getmtime(report)) >= step_start:
+                      fresh += 1
                   root = ET.parse(report).getroot()
               except Exception:
                   continue
               for case in root.iter("testcase"):
+                  tests += 1
                   for failure in case.findall("failure"):
-                      total += 1
+                      failures += 1
                       message = (failure.get("message") or "") + " " + (failure.text or "")
                       # Roborazzi 在基线不存在时报 "Roborazzi: The original file(...) was not found."
                       if "was not found" in message:
                           missing += 1
-          print(total, missing)
+          print(tests, failures, missing, fresh)
           PY
 
+          tests=0
+          failures=0
+          missing=0
+          fresh=0
+          # tests==0 或没有新报告 = 根本没跑（UP-TO-DATE），一律硬失败，禁止无声通过
+          assert_tests_ran() {
+            local label="$1" out
+            out=$(python3 qa/pixel-eval.py "$STEP_START" 2>/dev/null) || out="0 0 0 0"
+            tests=$(printf '%s' "$out" | awk '{print $1}')
+            failures=$(printf '%s' "$out" | awk '{print $2}')
+            missing=$(printf '%s' "$out" | awk '{print $3}')
+            fresh=$(printf '%s' "$out" | awk '{print $4}')
+            [ -n "$tests" ] || tests=0
+            [ -n "$failures" ] || failures=0
+            [ -n "$missing" ] || missing=0
+            [ -n "$fresh" ] || fresh=0
+            echo "[$label] 测试报告解析：tests=$tests failures=$failures missing_baseline=$missing fresh_reports=$fresh"
+            if [ "$tests" -le 0 ]; then
+              echo "::error::$label：报告里有 0 个用例，Gradle 多半把 testDebugUnitTest 判成 UP-TO-DATE，本次没有真正比较像素"
+              return 1
+            fi
+            if [ "$fresh" -le 0 ]; then
+              echo "::error::$label：$RESULTS_DIR 下没有晚于本次步骤开始时间（$STEP_START）的 XML，判定为未真正运行"
+              return 1
+            fi
+            return 0
+          }
+
           capture_baselines() {
-            echo "== 采集模式：recordRoborazziDebug =="
-            ./gradlew :app:recordRoborazziDebug -Proborazzi.test.record=true --console=plain \
-              > qa/roborazzi-record.log 2>&1
+            echo "== 采集模式：recordRoborazziDebug --rerun-tasks =="
+            ./gradlew :app:recordRoborazziDebug --rerun-tasks -Proborazzi.test.record=true \
+              --console=plain > qa/roborazzi-record.log 2>&1
             local code=$?
             tail -n 40 qa/roborazzi-record.log || true
+            if ! assert_tests_ran record; then
+              echo "pixel_mode=capture pixel_status=capture-no-tests exit=$code" > qa/pixel-status.txt
+              return 1
+            fi
             cp -f "$BASELINE_DIR"/*.png "$CAND"/ 2>/dev/null || true
             cp -f "$ROBORAZZI_OUT"/*.png "$CAND"/ 2>/dev/null || true
             find "$CAND" -maxdepth 1 \( -name '*_actual.png' -o -name '*_compare.png' \) -delete 2>/dev/null || true
             local collected
             collected=$(find "$CAND" -maxdepth 1 -name '*.png' | wc -l)
             if [ "$code" -ne 0 ] || [ "$collected" -eq 0 ]; then
-              echo "::error::基线采集失败（record exit=$code，采集 $collected 张），见 qa/roborazzi-record.log"
-              echo "pixel_mode=capture pixel_status=capture-failed collected=$collected exit=$code" > qa/pixel-status.txt
+              echo "::error::基线采集失败（record exit=$code，tests=$tests，采集 $collected 张），见 qa/roborazzi-record.log"
+              echo "pixel_mode=capture pixel_status=capture-failed collected=$collected tests=$tests exit=$code" \
+                > qa/pixel-status.txt
               return 1
             fi
             echo "首次采集 $collected 张候选基线 → $CAND（待人工提交到 $BASELINE_DIR）"
-            echo "pixel_mode=capture pixel_status=captured collected=$collected note=首次采集，待人工提交基线" \
+            echo "pixel_mode=capture pixel_status=captured collected=$collected tests=$tests note=首次采集，待人工提交基线" \
               > qa/pixel-status.txt
             return 0
           }
@@ -305,39 +351,37 @@ jobs:
           if [ "$MODE" = "capture" ]; then
             capture_baselines || STATUS=1
           else
-            echo "== 校验模式：verifyRoborazziDebug（$baseline_count 张基线）=="
-            ./gradlew :app:verifyRoborazziDebug -Proborazzi.test.verify=true --console=plain \
-              > qa/roborazzi-verify.log 2>&1
+            echo "== 校验模式：verifyRoborazziDebug --rerun-tasks（$baseline_count 张基线）=="
+            ./gradlew :app:verifyRoborazziDebug --rerun-tasks -Proborazzi.test.verify=true \
+              --console=plain > qa/roborazzi-verify.log 2>&1
             verify_exit=$?
             tail -n 60 qa/roborazzi-verify.log || true
             cp -f "$ROBORAZZI_OUT"/*_compare.png "$DIFF"/ 2>/dev/null || true
             cp -f "$ROBORAZZI_OUT"/*_actual.png "$DIFF"/ 2>/dev/null || true
-            if [ "$verify_exit" -eq 0 ]; then
-              echo "像素回归通过（$baseline_count 张基线）"
-              echo "pixel_mode=verify pixel_status=passed baselines=$baseline_count" > qa/pixel-status.txt
+            if ! assert_tests_ran verify; then
+              echo "pixel_mode=verify pixel_status=verify-no-tests exit=$verify_exit" > qa/pixel-status.txt
+              STATUS=1
+            elif [ "$verify_exit" -eq 0 ]; then
+              echo "像素回归通过（$baseline_count 张基线，$tests 个用例）"
+              echo "pixel_mode=verify pixel_status=passed baselines=$baseline_count tests=$tests" > qa/pixel-status.txt
+            elif [ "$failures" -gt 0 ] && [ "$failures" -eq "$missing" ]; then
+              echo "::warning::基线文件缺失（failures=$failures 全部是 was not found），按约定转入采集模式，不判定失败"
+              capture_baselines || STATUS=1
             else
-              evaluated=$(python3 qa/pixel-eval.py 2>/dev/null || echo "0 0")
-              total=$(printf '%s' "$evaluated" | awk '{print $1}')
-              missing=$(printf '%s' "$evaluated" | awk '{print $2}')
-              echo "校验失败：失败用例 ${total:-0} 个，其中基线文件不存在 ${missing:-0} 个"
-              if [ "${total:-0}" -gt 0 ] && [ "${total:-0}" -eq "${missing:-0}" ]; then
-                echo "::warning::基线文件缺失（部分或全部），按约定转入采集模式，不判定失败"
-                capture_baselines || STATUS=1
-              else
-                diff_count=$((total - missing))
-                images=$(find "$DIFF" -maxdepth 1 -name '*.png' | wc -l)
-                echo "::error::像素回归发现 $diff_count 处差异（差异/实际图 $images 张已放到 $DIFF），详见 qa/roborazzi-verify.log"
-                echo "pixel_mode=verify pixel_status=failed baselines=$baseline_count diffs=$diff_count" \
-                  > qa/pixel-status.txt
-                STATUS=1
-              fi
+              diff_count=$((failures - missing))
+              images=$(find "$DIFF" -maxdepth 1 -name '*.png' | wc -l)
+              echo "::error::像素回归发现 $diff_count 处差异（差异/实际图 $images 张已放到 $DIFF），详见 qa/roborazzi-verify.log"
+              echo "pixel_mode=verify pixel_status=failed baselines=$baseline_count tests=$tests diffs=$diff_count" \
+                > qa/pixel-status.txt
+              STATUS=1
             fi
           fi
 
           {
             echo "### 像素基线回归"
             echo
-            echo "判定规则：$BASELINE_DIR 下没有 PNG → 采集模式；有 PNG → 校验模式（差异即失败）"
+            echo "判定规则：$BASELINE_DIR 下没有 PNG → 采集模式；有 PNG → 校验模式（差异即失败）。"
+            echo "两条命令都带 --rerun-tasks，并用测试报告 XML 的用例数与时间戳证明真的跑过。"
             echo
             echo "    $(cat qa/pixel-status.txt 2>/dev/null || echo 'pixel-status 缺失')"
           } >> "$GITHUB_STEP_SUMMARY"
@@ -844,6 +888,8 @@ jobs:
             echo "    候选图在 $NERIBOT_UI_OUT_DIR/baseline-candidates/，需要人工提交到 app/src/test/screenshots/，本次不算失败。"
             echo "  - pixel_mode=verify：已与入库基线比较。通过=像素回归通过；失败时差异图在 $NERIBOT_UI_OUT_DIR/baseline-diff/（*_compare.png 是对比图、*_actual.png 是本次实际渲染），要作为【审阅发现】里的回归证据。"
             echo "  - 两种情况的原始日志都在 qa/roborazzi-record.log 或 qa/roborazzi-verify.log。"
+            echo "  - 门禁用 --rerun-tasks 强制真跑，并用测试报告 XML 证明真的跑过（pixel-status 里有 tests= 用例数）；"
+            echo "    看到 pixel_status=verify-no-tests / capture-no-tests 说明门禁没能真正执行，按环境问题写进报告，不要当成通过。"
             echo "真机走查："
             echo "$WALK"
             echo "logcat 致命错误/ANR：qa/logcat-api30.txt、qa/logcat-api35.txt"
