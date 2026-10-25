@@ -230,8 +230,7 @@ jobs:
           grep -vE '^INLINE_REQUESTED=' qa/inline-request.txt >> "$GITHUB_STEP_SUMMARY" || true
 
       - name: Build APK and unit tests
-        # 构建失败不阻断后续步骤：agent 仍然要跑，并把失败写进 review
-        continue-on-error: true
+        # 构建失败要如实失败；后续步骤统一用 if: !cancelled() 保证 agent 仍然跑起来并写进 review
         run: |
           set -uo pipefail
           mkdir -p qa
@@ -262,56 +261,116 @@ jobs:
           for f in qa/build-assemble-debug.log qa/test-unit.log; do
             echo "===== $f (tail 60) ====="; tail -n 60 "$f" 2>/dev/null || true
           done > qa/build-log-tail.txt
+          if [ "$build_status" -ne 0 ]; then
+            echo "::error::构建或单测失败（见 qa/build-*.log 与 qa/test-unit.log），交给 agent 写进 review"
+          fi
+          exit $build_status
 
       - name: Pixel baseline regression
-        # Roborazzi（JVM + Robolectric）：有基线就 verify，没基线就 record 并把候选图交给人提交
-        continue-on-error: true
+        # 两种模式显式判定：没有入库基线 -> 采集（成功）；有基线 -> 校验（差异即失败）
+        if: ${{ !cancelled() }}
         run: |
           set -uo pipefail
           BASELINE_DIR=app/src/test/screenshots
+          ROBORAZZI_OUT=app/build/outputs/roborazzi
           CAND="$NERIBOT_UI_OUT_DIR/baseline-candidates"
           DIFF="$NERIBOT_UI_OUT_DIR/baseline-diff"
           mkdir -p qa "$CAND" "$DIFF"
-          baseline_count=$(find "$BASELINE_DIR" -maxdepth 1 -name '*.png' 2>/dev/null | wc -l)
 
-          if [ "$baseline_count" -eq 0 ]; then
-            echo "基线缺失，已采集：$BASELINE_DIR 内没有 PNG，进入采集分支（不判定失败）"
+          baseline_count=$(find "$BASELINE_DIR" -maxdepth 1 -name '*.png' 2>/dev/null | wc -l)
+          if [ "$baseline_count" -eq 0 ]; then MODE=capture; else MODE=verify; fi
+          echo "::notice::像素基线模式=$MODE（入库基线 $baseline_count 张）"
+
+          # 失败用例分类：只数 failure 元素（message 与 stack trace 会重复同一句话），
+          # 用 "was not found" 区分「基线文件不存在」与「像素真的不一致」
+          cat > qa/pixel-eval.py <<'PY'
+          import glob, xml.etree.ElementTree as ET
+
+          total = 0
+          missing = 0
+          for report in glob.glob("app/build/test-results/testDebugUnitTest/TEST-*.xml"):
+              try:
+                  root = ET.parse(report).getroot()
+              except Exception:
+                  continue
+              for case in root.iter("testcase"):
+                  for failure in case.findall("failure"):
+                      total += 1
+                      message = (failure.get("message") or "") + " " + (failure.text or "")
+                      # Roborazzi 在基线不存在时报 "Roborazzi: The original file(...) was not found."
+                      if "was not found" in message:
+                          missing += 1
+          print(total, missing)
+          PY
+
+          capture_baselines() {
+            echo "== 采集模式：recordRoborazziDebug =="
             ./gradlew :app:recordRoborazziDebug -Proborazzi.test.record=true --console=plain \
               > qa/roborazzi-record.log 2>&1
-            code=$?
+            local code=$?
             tail -n 40 qa/roborazzi-record.log || true
             cp -f "$BASELINE_DIR"/*.png "$CAND"/ 2>/dev/null || true
-            cp -f app/build/outputs/roborazzi/*.png "$CAND"/ 2>/dev/null || true
+            cp -f "$ROBORAZZI_OUT"/*.png "$CAND"/ 2>/dev/null || true
+            find "$CAND" -maxdepth 1 \( -name '*_actual.png' -o -name '*_compare.png' \) -delete 2>/dev/null || true
+            local collected
             collected=$(find "$CAND" -maxdepth 1 -name '*.png' | wc -l)
             if [ "$code" -ne 0 ] || [ "$collected" -eq 0 ]; then
-              echo "::warning::基线采集失败或没有产出图片（record exit=$code，采集 $collected 张）"
-              echo "pixel_status=capture-failed collected=$collected exit=$code" > qa/pixel-status.txt
-            else
-              echo "已采集 $collected 张候选基线 -> $CAND（需人工提交到 $BASELINE_DIR 后才转为回归比较）"
-              echo "pixel_status=captured collected=$collected" > qa/pixel-status.txt
+              echo "::error::基线采集失败（record exit=$code，采集 $collected 张），见 qa/roborazzi-record.log"
+              echo "pixel_mode=capture pixel_status=capture-failed collected=$collected exit=$code" > qa/pixel-status.txt
+              return 1
             fi
-            exit 0
+            echo "首次采集 $collected 张候选基线 → $CAND（待人工提交到 $BASELINE_DIR）"
+            echo "pixel_mode=capture pixel_status=captured collected=$collected note=首次采集，待人工提交基线" \
+              > qa/pixel-status.txt
+            return 0
+          }
+
+          STATUS=0
+          if [ "$MODE" = "capture" ]; then
+            capture_baselines || STATUS=1
+          else
+            echo "== 校验模式：verifyRoborazziDebug（$baseline_count 张基线）=="
+            ./gradlew :app:verifyRoborazziDebug -Proborazzi.test.verify=true --console=plain \
+              > qa/roborazzi-verify.log 2>&1
+            verify_exit=$?
+            tail -n 60 qa/roborazzi-verify.log || true
+            cp -f "$ROBORAZZI_OUT"/*_compare.png "$DIFF"/ 2>/dev/null || true
+            cp -f "$ROBORAZZI_OUT"/*_actual.png "$DIFF"/ 2>/dev/null || true
+            if [ "$verify_exit" -eq 0 ]; then
+              echo "像素回归通过（$baseline_count 张基线）"
+              echo "pixel_mode=verify pixel_status=passed baselines=$baseline_count" > qa/pixel-status.txt
+            else
+              evaluated=$(python3 qa/pixel-eval.py 2>/dev/null || echo "0 0")
+              total=$(printf '%s' "$evaluated" | awk '{print $1}')
+              missing=$(printf '%s' "$evaluated" | awk '{print $2}')
+              echo "校验失败：失败用例 ${total:-0} 个，其中基线文件不存在 ${missing:-0} 个"
+              if [ "${total:-0}" -gt 0 ] && [ "${total:-0}" -eq "${missing:-0}" ]; then
+                echo "::warning::基线文件缺失（部分或全部），按约定转入采集模式，不判定失败"
+                capture_baselines || STATUS=1
+              else
+                diff_count=$((total - missing))
+                images=$(find "$DIFF" -maxdepth 1 -name '*.png' | wc -l)
+                echo "::error::像素回归发现 $diff_count 处差异（差异/实际图 $images 张已放到 $DIFF），详见 qa/roborazzi-verify.log"
+                echo "pixel_mode=verify pixel_status=failed baselines=$baseline_count diffs=$diff_count" \
+                  > qa/pixel-status.txt
+                STATUS=1
+              fi
+            fi
           fi
 
-          echo "已有 $baseline_count 张基线，执行像素回归比较"
-          ./gradlew :app:verifyRoborazziDebug -Proborazzi.test.verify=true --console=plain \
-            > qa/roborazzi-verify.log 2>&1
-          code=$?
-          tail -n 60 qa/roborazzi-verify.log || true
-          cp -f app/build/outputs/roborazzi/*_actual.png "$DIFF"/ 2>/dev/null || true
-          cp -f app/build/outputs/roborazzi/*_compare.png "$DIFF"/ 2>/dev/null || true
-          changed=$(find "$DIFF" -maxdepth 1 -name '*.png' | wc -l)
-          if [ "$code" -ne 0 ]; then
-            echo "::warning::像素回归有差异（exit=$code），差异图 $changed 张已放进 $DIFF"
-            echo "pixel_status=failed baselines=$baseline_count changed=$changed exit=$code" > qa/pixel-status.txt
-            exit 1
-          fi
-          echo "像素回归通过（$baseline_count 张基线）"
-          echo "pixel_status=passed baselines=$baseline_count" > qa/pixel-status.txt
+          {
+            echo "### 像素基线回归"
+            echo
+            echo "判定规则：$BASELINE_DIR 下没有 PNG → 采集模式；有 PNG → 校验模式（差异即失败）"
+            echo
+            echo "    $(cat qa/pixel-status.txt 2>/dev/null || echo 'pixel-status 缺失')"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          exit $STATUS
 
       - name: Device walkthrough (android-30, android-35)
         # 严格按镜像契约调用 neribot-emulator.sh，不自己拼 emulator 命令
-        continue-on-error: true
+        if: ${{ !cancelled() }}
         run: |
           set -uo pipefail
           OUT="$NERIBOT_UI_OUT_DIR"
@@ -330,75 +389,264 @@ jobs:
           echo "APK=$APK"
           if [ -z "$APK" ]; then
             echo "::warning::没有找到 debug APK（构建失败），跳过真机走查"
-            echo "all: status=skipped reason=no-apk" >> qa/walkthrough-result.txt
+            echo "all status=skipped reason=no-apk" >> qa/walkthrough-result.txt
             exit 0
           fi
 
-          # uiautomator dump 的 XML 解析器（按文本/content-desc 找控件中心点）
-          cat > "$WORK/find.py" <<'PY'
-          import re, sys, xml.etree.ElementTree as ET
+          # 本步注入的既有缺陷：首启 onboarding 的 Next 按钮被系统导航栏遮挡（实测所得），
+          # 必须作为 P2 写进 review 的【审阅发现】。
+          cat > qa/known-findings.txt <<'KF'
+          首启 onboarding 覆盖层（Choose your language）的 Next 按钮被系统导航栏遮挡：
+          - uiautomator 报告该 TextView bounds=[0,0][0,0]，零面积且 clickable=false，无障碍树里点不到；
+          - 按文本中心点击等于点 (0,0)，无任何效果；
+          - 按视觉位置 (540,2295) 点击会落到系统导航栏 Home，把 app 送进后台。
+          - 结论：首启页主按钮未避让 navigation bar，且未暴露可点击无障碍区域（P2）。
+          KF
 
-          path, pattern = sys.argv[1], sys.argv[2]
-          rx = re.compile(pattern, re.I)
-          try:
-              root = ET.parse(path).getroot()
-          except Exception:
-              sys.exit(1)
-          for node in root.iter("node"):
-              label = (node.get("text") or "") + " " + (node.get("content-desc") or "")
-              if not label.strip() or not rx.search(label):
-                  continue
-              m = re.match(r"\[(\d+),(\d+)\]\[(\d+),(\d+)\]", node.get("bounds") or "")
+          # uiautomator 辅助脚本：零面积过滤 + content-desc 优先 + 可点击祖先 + 顶部栏最右兜底 + 界面指纹
+          cat > "$WORK/ui.py" <<'PY'
+          import os, re, sys, xml.etree.ElementTree as ET
+
+          BOUNDS = re.compile(r"\[(-?\d+),(-?\d+)\]\[(-?\d+),(-?\d+)\]")
+          MIN_SIZE = 2  # 宽或高 <= 2px 视为零面积节点：accessibility 上点不到，一律跳过
+          HIT_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "last-hit.txt")
+
+
+          def bbox(node):
+              m = BOUNDS.match(node.get("bounds") or "")
               if not m:
-                  continue
+                  return None
               x1, y1, x2, y2 = (int(v) for v in m.groups())
-              if x2 > x1 and y2 > y1:
-                  print((x1 + x2) // 2, (y1 + y2) // 2)
-                  sys.exit(0)
-          sys.exit(1)
-          PY
+              if x2 - x1 <= MIN_SIZE or y2 - y1 <= MIN_SIZE:
+                  return None
+              return (x1, y1, x2, y2)
 
-          # 把当前界面里的可见文本压成一行，写进走查日志供 agent 核对
-          cat > "$WORK/texts.py" <<'PY'
-          import sys, xml.etree.ElementTree as ET
 
-          try:
-              root = ET.parse(sys.argv[1]).getroot()
-          except Exception:
-              sys.exit(0)
-          seen = []
-          for node in root.iter("node"):
-              label = ((node.get("text") or "") + (node.get("content-desc") or "")).strip()
-              if label and label not in seen:
-                  seen.append(label)
-          print(" | ".join(seen)[:1500])
+          def center(box):
+              x1, y1, x2, y2 = box
+              return ((x1 + x2) // 2, (y1 + y2) // 2)
+
+
+          def walk(node, chain):
+              yield node, chain
+              for child in node:
+                  for item in walk(child, chain + [node]):
+                      yield item
+
+
+          def load(path):
+              try:
+                  return ET.parse(path).getroot()
+              except Exception:
+                  return None
+
+
+          def clickable_target(node, chain):
+              # 优先自身可点击；否则向上找最近的可点击祖先（设置行里 Text 挂在可点 Row 下的常见形态）
+              for candidate in [node] + list(reversed(chain)):
+                  if candidate.get("clickable") == "true" and bbox(candidate):
+                      return candidate
+              return node if bbox(node) else None
+
+
+          def describe(node, box, how):
+              label = (node.get("content-desc") or node.get("text") or "").strip()[:40]
+              x1, y1, x2, y2 = box
+              return how + " label=" + (label or "<空>") + " bounds=[" + ",".join(str(v) for v in (x1, y1, x2, y2)) + "]"
+
+
+          def remember(text):
+              try:
+                  with open(HIT_FILE, "w", encoding="utf-8") as handle:
+                      handle.write(text + "\n")
+              except Exception:
+                  pass
+
+
+          def cmd_find(path, pattern):
+              root = load(path)
+              if root is None:
+                  return 1
+              rx = re.compile(pattern, re.I)
+              best = None
+              for node, chain in walk(root, []):
+                  if bbox(node) is None:
+                      continue
+                  desc = node.get("content-desc") or ""
+                  text = node.get("text") or ""
+                  via_desc = bool(desc and rx.search(desc))
+                  via_text = bool(text and rx.search(text))
+                  if not (via_desc or via_text):
+                      continue
+                  target = clickable_target(node, chain)
+                  if target is None:
+                      continue
+                  box = bbox(target)
+                  # 打分：content-desc 命中优先，其次可点击节点，同分取面积更小的叶子控件
+                  score = (2 if via_desc else 0) + (1 if target.get("clickable") == "true" else 0)
+                  area = (box[2] - box[0]) * (box[3] - box[1])
+                  matched = (desc if via_desc else text).strip()[:40]
+                  how = ("desc=" if via_desc else "text=") + matched
+                  candidate = (score, -area, center(box), how + " " + describe(target, box, "target"))
+
+                  if best is None or candidate[:2] > best[:2]:
+                      best = candidate
+              if best is None:
+                  return 1
+              x, y = best[2]
+              sys.stdout.write(str(x) + " " + str(y) + "\n")
+              remember(best[3])
+              return 0
+
+
+          def cmd_rightmost_top(path):
+              # 兜底启发式：content-desc 全空时，取顶部栏最右侧的可点击窄节点（= 设置入口）
+              root = load(path)
+              if root is None:
+                  return 1
+              boxes = [box for box in (bbox(node) for node, _ in walk(root, [])) if box]
+              if not boxes:
+                  return 1
+              width = max(box[2] for box in boxes)
+              height = max(box[3] for box in boxes)
+              best = None
+              for node, _ in walk(root, []):
+                  if node.get("clickable") != "true":
+                      continue
+                  box = bbox(node)
+                  if box is None:
+                      continue
+                  if box[2] - box[0] > width * 0.6:  # 整行容器不算图标
+                      continue
+                  if box[3] > height * 0.30:         # 只认顶部栏
+                      continue
+                  if best is None or box[2] > best[0][2]:
+                      best = (box, node)
+              if best is None:
+                  return 1
+              box, node = (best[0], best[1])
+              x, y = center(box)
+              sys.stdout.write(str(x) + " " + str(y) + "\n")
+              remember("heuristic=rightmost-top " + describe(node, box, "clickable"))
+              return 0
+
+
+          def signature(path):
+              root = load(path)
+              if root is None:
+                  return "unreadable"
+              clickable = []
+              texts = []
+              for node, _ in walk(root, []):
+                  box = bbox(node)
+                  if box is None:
+                      continue
+                  if node.get("clickable") == "true":
+                      clickable.append(",".join(str(v) for v in box))
+                  label = (node.get("text") or node.get("content-desc") or "").strip()
+                  if label:
+                      texts.append(label)
+              clickable.sort()
+              texts.sort()
+              return str(len(clickable)) + "c|" + ";".join(clickable) + "|" + ";".join(texts)
+
+
+          def cmd_texts(path):
+              root = load(path)
+              if root is None:
+                  return 1
+              seen = []
+              for node, _ in walk(root, []):
+                  label = (node.get("text") or node.get("content-desc") or "").strip()
+                  if label and label not in seen:
+                      seen.append(label)
+              sys.stdout.write(" | ".join(seen)[:1500] + "\n")
+              return 0
+
+
+          def main(argv):
+              if len(argv) < 3:
+                  return 2
+              command, path = argv[1], argv[2]
+              if command == "find" and len(argv) >= 4:
+                  return cmd_find(path, argv[3])
+              if command == "rightmost-top":
+                  return cmd_rightmost_top(path)
+              if command == "fingerprint":
+                  sys.stdout.write(signature(path) + "\n")
+                  return 0
+              if command == "texts":
+                  return cmd_texts(path)
+              return 2
+
+
+          sys.exit(main(sys.argv))
           PY
 
           SERIAL=""
+
           dump() {
             local i
             for i in 1 2 3; do
               adb -s "$SERIAL" shell uiautomator dump /sdcard/neribot_dump.xml >/dev/null 2>&1
               adb -s "$SERIAL" shell cat /sdcard/neribot_dump.xml > "$WORK/dump.xml" 2>/dev/null
-              if [ -s "$WORK/dump.xml" ]; then return 0; fi
+              if [ -s "$WORK/dump.xml" ] && grep -q '<hierarchy' "$WORK/dump.xml"; then return 0; fi
               sleep 2
             done
             return 1
           }
 
-          tap_text() {
-            local p xy
-            for p in "$@"; do
-              dump || true
-              xy=$(python3 "$WORK/find.py" "$WORK/dump.xml" "$p" 2>/dev/null) || xy=""
-              if [ -n "$xy" ]; then
-                adb -s "$SERIAL" shell input tap $xy >/dev/null 2>&1
-                sleep 2
-                echo "  tap /$p/ -> $xy"
+          fingerprint() {
+            python3 "$WORK/ui.py" fingerprint "$WORK/dump.xml" 2>/dev/null || echo unreadable
+          }
+
+          shot() {
+            adb -s "$SERIAL" exec-out screencap -p > "$OUT/$1.png" 2>/dev/null
+            local size
+            size=$(stat -c %s "$OUT/$1.png" 2>/dev/null || echo 0)
+            if [ "$size" -lt 1000 ]; then
+              echo "::warning::截图 $1.png 疑似为空（$size 字节）"
+            fi
+            echo "  shot $1.png ($size 字节)"
+          }
+
+          # 点击 + 进度校验：候选选择器依次尝试，tap 前后各 dump 一次比较界面指纹；
+          # 指纹没变就换下一个候选，全部无效则记 no-progress（绝不静默通过）
+          tap_progress() {
+            local name="$1"; shift
+            local before after xy spec hit
+            if ! dump; then
+              echo "  [$name] dump 失败"
+              return 1
+            fi
+            before=$(fingerprint)
+            for spec in "$@"; do
+              rm -f "$WORK/last-hit.txt"
+              if [ "$spec" = "@rightmost-top" ]; then
+                xy=$(python3 "$WORK/ui.py" rightmost-top "$WORK/dump.xml" 2>/dev/null) || xy=""
+              else
+                xy=$(python3 "$WORK/ui.py" find "$WORK/dump.xml" "$spec" 2>/dev/null) || xy=""
+              fi
+              hit=$(head -n 1 "$WORK/last-hit.txt" 2>/dev/null || true)
+              if [ -z "$xy" ]; then
+                echo "  [$name] 选择器 /$spec/ 未命中可用节点（零面积或被过滤）"
+                continue
+              fi
+              echo "  [$name] 命中 $hit -> tap $xy"
+              adb -s "$SERIAL" shell input tap $xy >/dev/null 2>&1
+              sleep 2
+              if ! dump; then
+                echo "  [$name] tap 后 dump 失败，换下一个候选"
+                continue
+              fi
+              after=$(fingerprint)
+              if [ "$after" != "$before" ]; then
+                echo "  [$name] 进度确认：界面指纹已变化"
                 return 0
               fi
+              echo "  [$name] tap $xy 后界面没有任何变化，换下一个候选"
             done
-            echo "  tap 未命中：$*"
+            echo "  [$name] no-progress：候选全部无效或点击无效果"
             return 1
           }
 
@@ -407,24 +655,46 @@ jobs:
             sleep 1
           }
 
-          shot() {
-            adb -s "$SERIAL" exec-out screencap -p > "$OUT/$1.png" 2>/dev/null
-            local size
-            size=$(stat -c %s "$OUT/$1.png" 2>/dev/null || echo 0)
-            if [ "${size:-0}" -lt 1000 ]; then
-              echo "::warning::截图 $1.png 疑似为空（$size 字节）"
-            fi
-            echo "  shot $1.png ($size bytes)"
-          }
-
-          screen() {
+          walk_screen() {
             local name="$1"; shift
+            local nav=skipped
             echo "== 走查 $name"
-            if [ "$#" -gt 0 ]; then tap_text "$@" || true; fi
+            if [ "$#" -gt 0 ]; then
+              if tap_progress "$name" "$@"; then nav=reached; else nav=no-progress; fi
+            fi
             sleep 1
             shot "$name"
-            dump || true
-            echo "  ui: $(python3 "$WORK/texts.py" "$WORK/dump.xml" 2>/dev/null)"
+            if dump; then
+              echo "  ui: $(python3 "$WORK/ui.py" texts "$WORK/dump.xml" 2>/dev/null)"
+              echo "$name nav=$nav status=ok" >> qa/walkthrough-result.txt
+            else
+              echo "$name nav=$nav status=dump-failed" >> qa/walkthrough-result.txt
+            fi
+          }
+
+          # 首启覆盖层预处理：debug 包允许 run-as，写入 onboardingCompleted=true 直接进首页。
+          # 不这么做的话首启页的 Next 按钮零面积 + 被系统导航栏遮挡，按文本点击必然卡住。
+          seed_onboarding() {
+            local path=shared_prefs/neko_weather.xml
+            if adb -s "$SERIAL" shell run-as "$PKG" cat "$path" >/dev/null 2>&1; then
+              echo "  首启标记：$path 已存在，跳过写入"
+              return 0
+            fi
+            {
+              echo "<?xml version='1.0' encoding='utf-8' standalone='yes' ?>"
+              echo "<map>"
+              echo "    <boolean name=\"onboardingCompleted\" value=\"true\" />"
+              echo "</map>"
+            } > "$WORK/neko_weather.xml"
+            adb -s "$SERIAL" shell "run-as $PKG sh -c 'mkdir -p shared_prefs && cat > $path'" \
+              < "$WORK/neko_weather.xml" 2>>"$WORK/seed-$API.log"
+            if adb -s "$SERIAL" shell run-as "$PKG" cat "$path" 2>>"$WORK/seed-$API.log" \
+                 | grep -q onboardingCompleted; then
+              echo "  首启标记 onboardingCompleted=true 写入成功"
+              return 0
+            fi
+            echo "::warning::首启标记写入失败（见 qa/device/seed-$API.log），首启覆盖层可能仍会出现"
+            return 1
           }
 
           for API in 30 35; do
@@ -464,44 +734,61 @@ jobs:
             echo "installed $(basename "$APK")"
 
             adb -s "$SERIAL" shell am force-stop "$PKG" >/dev/null 2>&1 || true
-            adb -s "$SERIAL" shell am start -W -n "$PKG/.MainActivity" > "$WORK/start-$API.log" 2>&1 || true
-            tail -n 5 "$WORK/start-$API.log" || true
-            sleep 8
-
-            # 首次安装会进 onboarding（文案：暂时跳过 / 下一步 / 开始使用）
-            screen "api$API-01-first-screen"
-            if tap_text '暂时跳过'; then
-              screen "api$API-02-onboarding-skipped"
-            else
-              tap_text '开始使用' '下一步' || true
-              screen "api$API-02-after-onboarding"
+            if ! seed_onboarding; then
+              echo "android-$API onboarding-seed=failed" >> qa/walkthrough-result.txt
             fi
 
-            screen "api$API-03-home"
-            adb -s "$SERIAL" shell input swipe 540 1500 540 500 300 >/dev/null 2>&1 || true
+            adb -s "$SERIAL" shell am start -W -n "$PKG/.MainActivity" > "$WORK/start-$API.log" 2>&1 || true
+            tail -n 3 "$WORK/start-$API.log" || true
+            sleep 6
+
+            walk_screen "api$API-01-home"
+
+            # 首启覆盖层仍在 = 预处理失败，按环境问题记录，不再盲点
+            if dump && python3 "$WORK/ui.py" texts "$WORK/dump.xml" 2>/dev/null \
+                 | grep -qE 'Choose your language|选择你的语言|言語を選択|言語の選択'; then
+              echo "::warning::android-$API 首启覆盖层仍然存在，按环境问题处理，不继续盲点"
+              echo "android-$API status=onboarding-blocked" >> qa/walkthrough-result.txt
+              shot "api$API-02-onboarding-blocked"
+              adb -s "$SERIAL" logcat -d -v threadtime 2>/dev/null \
+                | grep -Ei 'FATAL EXCEPTION|ANR in |E/AndroidRuntime' > "qa/logcat-api$API.txt" || true
+              /usr/local/bin/neribot-emulator.sh stop "$API" >/dev/null 2>&1 || true
+              continue
+            fi
+
+            # 首页下滑：气象灾害预警等卡片
+            adb -s "$SERIAL" shell input swipe 540 1500 540 600 300 >/dev/null 2>&1 || true
             sleep 1
-            screen "api$API-04-alerts"
-            screen "api$API-05-radar" '雷达' '云图' 'Radar'
+            walk_screen "api$API-02-cards-alerts"
+            walk_screen "api$API-03-radar" '雷达' '云图' 'Radar'
 
             back
-            screen "api$API-06-settings" '设置' 'Settings'
-            screen "api$API-07-theme" '外观与主题' '主题色彩' '主题'
+            walk_screen "api$API-04-settings" '设置' 'Settings' '@rightmost-top'
+            walk_screen "api$API-05-appearance" '外观与主题' '应用与界面'
+            walk_screen "api$API-06-theme-color" '主题色彩'
             back
-            screen "api$API-08-timezone" '显示与更新' '时区' 'Time zone'
             back
-            screen "api$API-09-legal" '关于' '隐私政策' '用户协议' 'Legal'
+            walk_screen "api$API-07-timezone" '时区' '显示与更新'
             back
-            screen "api$API-10-ai" 'AI 模型' 'AI' '闲聊' '猫娘'
+            walk_screen "api$API-08-about" '关于'
+            walk_screen "api$API-09-legal-doc" '隐私政策' '用户协议'
+            back
+            back
+            walk_screen "api$API-10-ai" 'AI 模型' '闲聊 AI' '闲聊' 'AI'
 
             adb -s "$SERIAL" logcat -d -v threadtime 2>/dev/null \
               | grep -Ei 'FATAL EXCEPTION|ANR in |E/AndroidRuntime' > "qa/logcat-api$API.txt" || true
             crash=$(wc -l < "qa/logcat-api$API.txt" 2>/dev/null || echo 0)
             shots=$(find "$OUT" -maxdepth 1 -name "api$API-*.png" | wc -l)
-            if [ "${crash:-0}" -eq 0 ]; then
-              echo "android-$API status=ok shots=$shots crash_lines=0" >> qa/walkthrough-result.txt
+            noprogress=$(grep -c "api$API-.*nav=no-progress" qa/walkthrough-result.txt 2>/dev/null)
+            [ -n "$noprogress" ] || noprogress=0
+            if [ "$crash" -eq 0 ]; then
+              echo "android-$API status=ok shots=$shots no_progress_steps=$noprogress crash_lines=0" \
+                >> qa/walkthrough-result.txt
             else
               echo "::warning::android-$API logcat 里有 $crash 行 FATAL/ANR，见 qa/logcat-api$API.txt"
-              echo "android-$API status=crash-lines shots=$shots crash_lines=$crash" >> qa/walkthrough-result.txt
+              echo "android-$API status=crash-lines shots=$shots no_progress_steps=$noprogress crash_lines=$crash" \
+                >> qa/walkthrough-result.txt
             fi
 
             /usr/local/bin/neribot-emulator.sh stop "$API" >/dev/null 2>&1 || true
@@ -511,10 +798,12 @@ jobs:
           cat qa/walkthrough-result.txt || true
           echo "---- 截图 ----"
           ls -1 "$OUT" || true
+          exit 0
 
       - name: Upload screenshots as release assets
         # 镜像契约第 4 条：neribot-gh-image.sh 输出可直接粘进 review 的 markdown
-        continue-on-error: true
+        # 上传失败只降级为警告（agent 会被要求不要引用坏链接），不影响结论
+        if: ${{ !cancelled() }}
         run: |
           set -uo pipefail
           OUT="$NERIBOT_UI_OUT_DIR"
@@ -546,8 +835,10 @@ jobs:
           echo "---- $IMAGES_MD ----"
           cat "$IMAGES_MD"
           echo "IMAGES_MD=$IMAGES_MD" >> "$GITHUB_ENV"
+          exit 0
 
       - name: Build agent prompt
+        if: ${{ !cancelled() }}
         run: |
           set -euo pipefail
           WALK=$(cat qa/walkthrough-result.txt 2>/dev/null || echo "（无走查结果）")
@@ -575,10 +866,16 @@ jobs:
             printf '%s\n' "${REQUEST_TEXT:-（空）}"
             echo "== 本次运行已经准备好的材料 =="
             echo "构建：$BUILD_STATUS（日志在 qa/build-*.log、qa/test-unit.log，尾部摘要在 qa/build-log-tail.txt）"
-            echo "像素基线：$PIXEL_STATUS（日志在 qa/roborazzi-*.log）"
+            echo "像素基线：$PIXEL_STATUS"
+            echo "  - pixel_mode=capture：app/src/test/screenshots/ 里还没有入库基线，本次只是采集。"
+            echo "    候选图在 $NERIBOT_UI_OUT_DIR/baseline-candidates/，需要人工提交到 app/src/test/screenshots/，本次不算失败。"
+            echo "  - pixel_mode=verify：已与入库基线比较。通过=像素回归通过；失败时差异图在 $NERIBOT_UI_OUT_DIR/baseline-diff/（*_compare.png 是对比图、*_actual.png 是本次实际渲染），要作为【审阅发现】里的回归证据。"
+            echo "  - 两种情况的原始日志都在 qa/roborazzi-record.log 或 qa/roborazzi-verify.log。"
             echo "真机走查："
             echo "$WALK"
             echo "logcat 致命错误/ANR：qa/logcat-api30.txt、qa/logcat-api35.txt"
+            echo "已知缺陷（流水线在走查里实测到，必须原样写进【审阅发现】的 P2）："
+            echo "$(cat qa/known-findings.txt 2>/dev/null || echo '（无）')"
             echo
             echo "任务:"
             echo "1. 用 gh（token 已在环境变量 GH_TOKEN 中）读全这个 PR：gh pr view $PR_NUMBER -R $REPO（标题/正文）、gh pr diff $PR_NUMBER -R $REPO、关联 issue 与已有评论。"
@@ -589,6 +886,10 @@ jobs:
             echo "3. 真机走查（必须真做，不能只读代码）：模拟器与 APK 已经由流水线启动并安装好，$NERIBOT_UI_OUT_DIR 里有每屏截图。请按屏走查这些界面："
             echo "   首页 / 气象灾害预警 / 雷达云图 / 设置 / 外观与主题（主题色彩、外观预设）/ 时区 / 法律文档（隐私政策、用户协议）/ 闲聊 AI。"
             echo "   每一屏至少一张截图；必要时自己启动模拟器复现、补截图、抓 uiautomator dump。"
+            echo "   如果截图/dump 里仍然出现 Choose your language / 选择你的语言（首启覆盖层），说明流水线的 onboarding 预处理失败了："
+            echo "   把它当成环境问题写进【环境与范围】并说明影响范围，不要继续盲点那个点不到的 Next 按钮。"
+            echo "   设置入口怎么定位：先用 content-desc 或文本「设置」找；dashboard 上那几个圆形图标在无障碍树里 desc 是空的，"
+            echo "   这时退路是「顶部栏最右侧的可点击节点」——流水线脚本就是这么兜底的，日志里记了命中的选择器与坐标，可对照截图核对。"
             echo "   记录「步骤 - 期望 - 实际」：点了什么、应该看到什么、实际看到什么（文案/布局/空态/崩溃）。"
             echo "   检查 logcat（qa/logcat-api30.txt、qa/logcat-api35.txt，或自己 adb logcat -d）里的 FATAL EXCEPTION 与 ANR。"
             echo "   截图里出现的视觉缺陷（文字截断、控件重叠、空态未处理、深色模式对比度、多语言串味）都算发现。"
@@ -627,7 +928,8 @@ jobs:
           echo "prompt 行数: $(wc -l < qa-prompt.txt)"
 
       - name: Run agent (DeepSeek Harness / deepseek-flash, effort max, 1M)
-        continue-on-error: true
+        # agent 失败要如实失败；Ensure review posted 仍然会跑并说明情况
+        if: ${{ !cancelled() }}
         env:
           # 会话 id 带 run 标识，便于在 dsh home 的 sessions/ 目录里对应排查
           NERIBOT_SESSION_ID: qa-run-${{ github.run_id }}-${{ github.run_attempt }}
