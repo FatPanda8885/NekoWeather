@@ -72,7 +72,9 @@ jobs:
       (github.event_name == 'issue_comment' &&
        github.event.issue.pull_request != null &&
        (contains(github.event.comment.body, '/qa') ||
-        contains(toLower(github.event.comment.body), '@neribot')) &&
+        contains(github.event.comment.body, '@NeriBot') ||
+        contains(github.event.comment.body, '@neribot') ||
+        contains(github.event.comment.body, '@NERIBOT')) &&
        github.event.comment.user.login != 'NeriBot' &&
        github.event.comment.author_association == 'OWNER')
     runs-on: [self-hosted, neribot]
@@ -1610,7 +1612,7 @@ jobs:
         # 必须加 --rerun-tasks：Roborazzi 的基线 PNG 不是 Gradle 声明的任务输入，
         # 只用 verifyRoborazziDebug --rerun 时依赖的 testDebugUnitTest 仍会被判 UP-TO-DATE，
         # 结果就是基线被改了也 BUILD SUCCESSFUL（实测：--rerun 无效，--rerun-tasks 才真跑）。
-        if: ${{ (!cancelled()) && env.PROCEED == 'true' }}
+        if: ${{ !cancelled() && env.PROCEED == 'true' }}
         run: |
           set -uo pipefail
           BASELINE_DIR=app/src/test/screenshots
@@ -1754,7 +1756,7 @@ jobs:
 
       - name: Device walkthrough (android-30, android-35)
         # 严格按镜像契约调用 neribot-emulator.sh，不自己拼 emulator 命令
-        if: ${{ (!cancelled()) && env.PROCEED == 'true' }}
+        if: ${{ !cancelled() && env.PROCEED == 'true' }}
         run: |
           set -uo pipefail
           OUT="$NERIBOT_UI_OUT_DIR"
@@ -2462,7 +2464,7 @@ jobs:
       - name: Upload screenshots as release assets
         # 镜像契约第 4 条：neribot-gh-image.sh 输出可直接粘进 review 的 markdown
         # 上传失败只降级为警告（agent 会被要求不要引用坏链接），不影响结论
-        if: ${{ (!cancelled()) && env.PROCEED == 'true' }}
+        if: ${{ !cancelled() && env.PROCEED == 'true' }}
         run: |
           set -uo pipefail
           OUT="$NERIBOT_UI_OUT_DIR"
@@ -2498,7 +2500,7 @@ jobs:
 
 
       - name: Build agent prompt
-        if: ${{ (!cancelled()) && env.PROCEED == 'true' }}
+        if: ${{ !cancelled() && env.PROCEED == 'true' }}
         run: |
           set -euo pipefail
           WALK=$(cat qa/walkthrough-result.txt 2>/dev/null || echo "（无走查结果）")
@@ -2601,7 +2603,7 @@ jobs:
 
       - name: Run agent (DeepSeek Harness / deepseek-flash, effort max, 1M)
         # agent 失败要如实失败；Ensure review posted 仍然会跑并说明情况
-        if: ${{ (!cancelled()) && env.PROCEED == 'true' }}
+        if: ${{ !cancelled() && env.PROCEED == 'true' }}
         env:
           # 会话 id 带 run 标识，便于在 dsh home 的 sessions/ 目录里对应排查
           NERIBOT_SESSION_ID: qa-run-${{ github.run_id }}-${{ github.run_attempt }}
@@ -2626,7 +2628,7 @@ jobs:
 
       - name: Ensure review posted
         # 失败也要跑：构建环境坏了不能让请求者干等，至少留一条说明
-        if: ${{ (!cancelled()) && env.PROCEED == 'true' }}
+        if: ${{ !cancelled() && env.PROCEED == 'true' }}
         run: |
           set -euo pipefail
           POSTED=$(gh api --paginate "repos/$REPO/pulls/$PR_NUMBER/reviews?per_page=100" \

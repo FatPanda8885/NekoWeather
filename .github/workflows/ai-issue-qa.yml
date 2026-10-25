@@ -45,8 +45,12 @@ jobs:
        (github.event.comment.user.login == github.repository_owner ||
         github.event.comment.author_association == 'OWNER' ||
         github.event.comment.author_association == 'MEMBER') &&
-       (contains(toLower(github.event.comment.body), '@neribot') ||
-        contains(toLower(github.event.comment.body), '/investigate')))
+       (contains(github.event.comment.body, '@NeriBot') ||
+        contains(github.event.comment.body, '@neribot') ||
+        contains(github.event.comment.body, '@NERIBOT') ||
+        contains(github.event.comment.body, '/investigate') ||
+        contains(github.event.comment.body, '/Investigate') ||
+        contains(github.event.comment.body, '/INVESTIGATE')))
     runs-on: [self-hosted, neribot]
     timeout-minutes: 90
     permissions:
