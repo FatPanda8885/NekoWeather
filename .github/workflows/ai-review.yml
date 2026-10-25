@@ -29,8 +29,8 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  # TODO: 改成你实际注册的 bot 账号登录名（preflight 会校验 NERIBOT_TOKEN 的身份与此一致）
-  BOT_LOGIN: your-bot-login
+  # bot 账号登录名（preflight 会校验 NERIBOT_TOKEN 的身份与此一致）
+  BOT_LOGIN: NeriBot
 
 jobs:
   qa:
