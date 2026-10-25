@@ -4,6 +4,8 @@ plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.compose")
+    // 像素基线回归（Roborazzi）：只生成 test 侧任务，不影响 release 产物
+    id("io.github.takahirom.roborazzi")
 }
 
 val releaseSigningFile = rootProject.file("signing/keystore.properties")
@@ -72,6 +74,9 @@ android {
     buildFeatures.compose = true
     buildFeatures.buildConfig = true
 
+    // Robolectric 读取 app 的资源（截图测试需要 theme/strings）
+    testOptions.unitTests.isIncludeAndroidResources = true
+
     val hasCubismSdk = rootProject.findProject(":cubismFramework") != null
     sourceSets["main"].java.srcDir(if (hasCubismSdk) "src/cubism/java" else "src/lite/java")
 
@@ -107,6 +112,15 @@ dependencies {
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20250107")
+
+    // 像素基线回归：JVM + Robolectric 渲染 Compose，靠 Roborazzi 存取 PNG 基线
+    // 基线目录 app/src/test/screenshots/，任务 recordRoborazziDebug / verifyRoborazziDebug
+    testImplementation(composeBom)
+    testImplementation("androidx.compose.ui:ui-test-junit4")
+    testImplementation("androidx.test.ext:junit:1.2.1")
+    testImplementation("org.robolectric:robolectric:4.14.1")
+    testImplementation("io.github.takahirom.roborazzi:roborazzi:1.47.0")
+    testImplementation("io.github.takahirom.roborazzi:roborazzi-compose:1.47.0")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
     androidTestImplementation("androidx.compose.ui:ui-test-junit4")
 }
