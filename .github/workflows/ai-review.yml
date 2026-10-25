@@ -399,10 +399,11 @@ jobs:
           : > qa/walkthrough-result.txt
           PKG=com.neko.weather
           APK=""
-          # 设置根页标记 = 页面标题「设置」+ 两个分组标题。
-          # 只匹配 text 属性（texts-only），因为 dashboard 的设置图标 content-desc 也叫「设置」；
-          # 入口名不能用作标记 —— 二级页的标题恰好就是入口名（外观与主题 / 语音与音色 …），会误判。
-          SETTINGS_MARKER='设置|应用与界面|数据与网络'
+          # 设置根页判定：标题「设置」与分组标题必须【同时】整串命中（equals-text，不做子串匹配）。
+          # 子串匹配会踩坑：主题色彩页的正文「…主题主要作用于设置等界面。」里就含「设置」。
+          # 只比对 text 属性 —— dashboard 的设置图标 content-desc 也叫「设置」。
+          SETTINGS_TITLE='设置'
+          SETTINGS_GROUPS='应用与界面|数据与网络'
 
           for f in app/build/outputs/apk/debug/app-x86_64-debug.apk \
                    app/build/outputs/apk/debug/*x86_64*.apk \
@@ -612,6 +613,19 @@ jobs:
               return 1
 
 
+          def cmd_equals_text(path, pattern):
+              # 整串相等（strip 后比较），pattern 用 | 分隔多个候选；不做子串匹配
+              root = load(path)
+              if root is None:
+                  return 1
+              wanted = set(item.strip() for item in pattern.split("|") if item.strip())
+              for node, _ in walk(root, []):
+                  label = (node.get("text") or "").strip()
+                  if label and label in wanted:
+                      return 0
+              return 1
+
+
           def main(argv):
               if len(argv) < 3:
                   return 2
@@ -631,6 +645,8 @@ jobs:
                   return cmd_contains(path, argv[3], text_only=True)
               if command == "contains" and len(argv) >= 4:
                   return cmd_contains(path, argv[3], text_only=False)
+              if command == "equals-text" and len(argv) >= 4:
+                  return cmd_equals_text(path, argv[3])
               return 2
 
 
@@ -787,15 +803,20 @@ jobs:
           }
 
           # 是否已在设置根页：先看当前视口，再滚回顶部看两次（根页可能被滚动过）
+          # 是否在设置根页：标题「设置」与分组标题必须同时整串命中（不用子串匹配）。
+          # 只命中一个标记不算 —— 主题色彩页正文里就含「设置」两个字。
+          root_markers_hit() {
+            python3 "$WORK/ui.py" equals-text "$WORK/dump.xml" "$SETTINGS_TITLE" || return 1
+            python3 "$WORK/ui.py" equals-text "$WORK/dump.xml" "$SETTINGS_GROUPS" || return 1
+            return 0
+          }
+
           at_settings_root() {
             local attempt
             for attempt in 1 2 3; do
               dump || return 1
-              # 用 python 匹配（ui.py contains-text）而不是 grep：
-              # 跨进程管道的编码不可控，中文匹配串在某些 locale 下会与输出编码不一致
-              if python3 "$WORK/ui.py" contains-text "$WORK/dump.xml" "$SETTINGS_MARKER"; then
-                return 0
-              fi
+              if root_markers_hit; then return 0; fi
+              # 根页可能被滚动过，分组标题滚出视口 → 先滚回顶部再判
               adb -s "$SERIAL" shell input swipe 540 700 540 1900 300 >/dev/null 2>&1
               sleep 1
             done
@@ -834,6 +855,11 @@ jobs:
                 return 1
               fi
             done
+            # 最后一次 back 之后再判一次（三层结构：主题色彩 → 外观与主题 → 设置，正好第 3 次 back 后到根页）
+            if at_settings_root; then
+              echo "  3 次 back 后已在设置根页" | tee -a "$WORK/back-$API.log"
+              return 0
+            fi
             echo "  3 次 back 仍未回到设置根页，兜底 am start 回首页后重新进入设置" | tee -a "$WORK/back-$API.log"
             if reenter_settings; then return 0; fi
             echo "::warning::3 次 back 与 am start 兜底都失败，判定 back-to-settings-failed" | tee -a "$WORK/back-$API.log"
