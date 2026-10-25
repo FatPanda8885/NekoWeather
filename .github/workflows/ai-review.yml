@@ -399,6 +399,8 @@ jobs:
           : > qa/walkthrough-result.txt
           PKG=com.neko.weather
           APK=""
+          # 设置根页的可见标记（分组标题 + 入口），用来判断"现在是不是在设置根页"
+          SETTINGS_MARKER='应用与界面|数据与网络|外观与主题|显示与更新|AI 天气建议|通知提醒|备份与还原'
 
           for f in app/build/outputs/apk/debug/app-x86_64-debug.apk \
                    app/build/outputs/apk/debug/*x86_64*.apk \
@@ -604,6 +606,8 @@ jobs:
           PY
 
           SERIAL=""
+          TIER_ABORT=0
+          LAST_FOCUS=""
 
           dump() {
             local i
@@ -620,6 +624,10 @@ jobs:
             python3 "$WORK/ui.py" fingerprint "$WORK/dump.xml" 2>/dev/null || echo unreadable
           }
 
+          texts() {
+            python3 "$WORK/ui.py" texts "$WORK/dump.xml" 2>/dev/null || true
+          }
+
           shot() {
             adb -s "$SERIAL" exec-out screencap -p > "$OUT/$1.png" 2>/dev/null
             local size
@@ -630,17 +638,66 @@ jobs:
             echo "  shot $1.png ($size 字节)"
           }
 
-          # 点击 + 进度校验：候选选择器依次尝试，tap 前后各 dump 一次比较界面指纹；
-          # 指纹没变就换下一个候选，全部无效则记 no-progress（绝不静默通过）
+          # 前台校验：焦点必须在 $PKG 上，否则任何点击都可能打到系统/第三方界面
+          foreground_ok() {
+            local focus resumed
+            focus=$(adb -s "$SERIAL" shell dumpsys window 2>/dev/null | grep -m1 'mCurrentFocus' | tr -d '\r')
+            if [ -n "$focus" ] && printf '%s' "$focus" | grep -q "$PKG"; then
+              return 0
+            fi
+            resumed=$(adb -s "$SERIAL" shell dumpsys activity activities 2>/dev/null | grep -m1 'mResumedActivity' | tr -d '\r')
+            if [ -n "$resumed" ] && printf '%s' "$resumed" | grep -q "$PKG"; then
+              return 0
+            fi
+            LAST_FOCUS="$focus"
+            if [ -z "$LAST_FOCUS" ]; then LAST_FOCUS="$resumed"; fi
+            if [ -z "$LAST_FOCUS" ]; then LAST_FOCUS="<空>"; fi
+            return 1
+          }
+
+          # 前台不在本 app 时用 am start 拉回来；拉不回来就是 wrong-app
+          ensure_foreground() {
+            if foreground_ok; then return 0; fi
+            echo "  前台不是 $PKG（$LAST_FOCUS），尝试 am start 拉回前台"
+            adb -s "$SERIAL" shell am start -W -n "$PKG/.MainActivity" >/dev/null 2>&1 || true
+            sleep 2
+            if foreground_ok; then
+              echo "  已拉回 $PKG 前台"
+              return 0
+            fi
+            echo "::warning::仍然不在 $PKG 前台（$LAST_FOCUS）"
+            return 1
+          }
+
+          # 点击 + 进度校验：候选选择器依次尝试；tap 前后各 dump 一次比较界面指纹。
+          # 支持两个伪候选：@scrollup / @scroll（滚动后刷新指纹基准，避免把滚动误判成"点击有进度"）
           tap_progress() {
             local name="$1"; shift
             local before after xy spec hit
+            if ! ensure_foreground; then
+              echo "  [$name] 前台不是 $PKG，拒绝在别的应用界面点击"
+              TIER_ABORT=1
+              echo "$name nav=wrong-app" >> qa/walkthrough-result.txt
+              return 1
+            fi
             if ! dump; then
               echo "  [$name] dump 失败"
               return 1
             fi
             before=$(fingerprint)
             for spec in "$@"; do
+              if [ "$spec" = "@scrollup" ] || [ "$spec" = "@scroll" ]; then
+                if [ "$spec" = "@scrollup" ]; then
+                  echo "  [$name] 上滑回顶部后继续寻找目标"
+                  adb -s "$SERIAL" shell input swipe 540 700 540 1900 300 >/dev/null 2>&1
+                else
+                  echo "  [$name] 下滑继续寻找目标"
+                  adb -s "$SERIAL" shell input swipe 540 1800 540 900 300 >/dev/null 2>&1
+                fi
+                sleep 1
+                if dump; then before=$(fingerprint); fi
+                continue
+              fi
               rm -f "$WORK/last-hit.txt"
               if [ "$spec" = "@rightmost-top" ]; then
                 xy=$(python3 "$WORK/ui.py" rightmost-top "$WORK/dump.xml" 2>/dev/null) || xy=""
@@ -651,6 +708,12 @@ jobs:
               if [ -z "$xy" ]; then
                 echo "  [$name] 选择器 /$spec/ 未命中可用节点（零面积或被过滤）"
                 continue
+              fi
+              if ! ensure_foreground; then
+                echo "  [$name] tap 前前台已不是 $PKG（$LAST_FOCUS），放弃本次点击"
+                TIER_ABORT=1
+                echo "$name nav=wrong-app" >> qa/walkthrough-result.txt
+                return 1
               fi
               echo "  [$name] 命中 $hit -> tap $xy"
               adb -s "$SERIAL" shell input tap $xy >/dev/null 2>&1
@@ -675,21 +738,102 @@ jobs:
             sleep 1
           }
 
+          # 回到设置根页：按 back 直到看到设置根页标记；一旦退回启动器就 am start 拉回并重新进设置
+          reenter_settings() {
+            adb -s "$SERIAL" shell am start -W -n "$PKG/.MainActivity" >/dev/null 2>&1 || true
+            sleep 2
+            if ! ensure_foreground; then
+              TIER_ABORT=1
+              return 1
+            fi
+            tap_progress "reenter-settings" '@scrollup' '设置' 'Settings' '@rightmost-top'
+          }
+
+          back_to_settings() {
+            local i
+            for i in 1 2 3; do
+              dump || true
+              if texts | grep -qE "$SETTINGS_MARKER"; then
+                echo "  已在设置根页"
+                return 0
+              fi
+              back
+              if ! foreground_ok; then
+                echo "  back 退出了应用（$LAST_FOCUS），am start 拉回后重新进入设置"
+                if ! reenter_settings; then
+                  TIER_ABORT=1
+                  echo "android-$API status=wrong-app stage=reenter" >> qa/walkthrough-result.txt
+                  return 1
+                fi
+                return 0
+              fi
+            done
+            echo "::warning::3 次 back 之后仍没回到设置根页"
+            return 1
+          }
+
           walk_screen() {
             local name="$1"; shift
+            if [ "$TIER_ABORT" -ne 0 ]; then
+              echo "== 跳过 $name（本档已判定 wrong-app）"
+              echo "$name nav=aborted status=skipped" >> qa/walkthrough-result.txt
+              return 0
+            fi
             local nav=skipped
             echo "== 走查 $name"
             if [ "$#" -gt 0 ]; then
               if tap_progress "$name" "$@"; then nav=reached; else nav=no-progress; fi
             fi
+            if [ "$TIER_ABORT" -ne 0 ]; then
+              echo "$name nav=aborted status=skipped" >> qa/walkthrough-result.txt
+              return 0
+            fi
             sleep 1
             shot "$name"
             if dump; then
-              echo "  ui: $(python3 "$WORK/ui.py" texts "$WORK/dump.xml" 2>/dev/null)"
+              echo "  ui: $(texts)"
               echo "$name nav=$nav status=ok" >> qa/walkthrough-result.txt
             else
               echo "$name nav=$nav status=dump-failed" >> qa/walkthrough-result.txt
             fi
+          }
+
+          # 纯滚动取证的步骤（首页下滑看预警卡片与降雨云图卡片）
+          scroll_and_shot() {
+            local name="$1"
+            adb -s "$SERIAL" shell input swipe 540 1500 540 600 300 >/dev/null 2>&1 || true
+            sleep 1
+            walk_screen "$name"
+          }
+
+          # 每档汇总：no-progress / wrong-app 一律降级，绝不报 ok
+          summarize_tier() {
+            local api="$1" crash shots noprogress wrongapp names status
+            if [ -f "qa/logcat-api$api.txt" ]; then
+              crash=$(wc -l < "qa/logcat-api$api.txt")
+            else
+              crash=0
+            fi
+            [ -n "$crash" ] || crash=0
+            shots=$(find "$OUT" -maxdepth 1 -name "api$api-*.png" | wc -l)
+            noprogress=$(grep -c "api$api-.*nav=no-progress" qa/walkthrough-result.txt 2>/dev/null)
+            [ -n "$noprogress" ] || noprogress=0
+            wrongapp=$(grep -c "api$api-.*nav=wrong-app" qa/walkthrough-result.txt 2>/dev/null)
+            [ -n "$wrongapp" ] || wrongapp=0
+            names=$(grep "api$api-.*nav=no-progress" qa/walkthrough-result.txt 2>/dev/null \
+              | awk '{print $1}' | tr '\n' ' ' | sed 's/ *$//')
+            [ -n "$names" ] || names=none
+            if [ "$wrongapp" -gt 0 ]; then
+              status=wrong-app
+            elif [ "$crash" -gt 0 ]; then
+              status=crash-lines
+            elif [ "$noprogress" -gt 0 ]; then
+              status=degraded
+            else
+              status=ok
+            fi
+            echo "android-$api status=$status shots=$shots no_progress_steps=$noprogress crash_lines=$crash"
+            echo "android-$api no_progress_screens=$names"
           }
 
           # 首启覆盖层预处理：debug 包允许 run-as，写入 onboardingCompleted=true 直接进首页。
@@ -719,6 +863,7 @@ jobs:
 
           for API in 30 35; do
             AVD="neribot-api$API"
+            TIER_ABORT=0
             echo "############ android-$API ($AVD) ############"
             if ! start_out=$(/usr/local/bin/neribot-emulator.sh start "$API" 2>&1); then
               echo "$start_out"
@@ -765,8 +910,7 @@ jobs:
             walk_screen "api$API-01-home"
 
             # 首启覆盖层仍在 = 预处理失败，按环境问题记录，不再盲点
-            if dump && python3 "$WORK/ui.py" texts "$WORK/dump.xml" 2>/dev/null \
-                 | grep -qE 'Choose your language|选择你的语言|言語を選択|言語の選択'; then
+            if dump && texts | grep -qE 'Choose your language|选择你的语言|言語を選択|言語の選択'; then
               echo "::warning::android-$API 首启覆盖层仍然存在，按环境问题处理，不继续盲点"
               echo "android-$API status=onboarding-blocked" >> qa/walkthrough-result.txt
               shot "api$API-02-onboarding-blocked"
@@ -776,40 +920,44 @@ jobs:
               continue
             fi
 
-            # 首页下滑：气象灾害预警等卡片
-            adb -s "$SERIAL" shell input swipe 540 1500 540 600 300 >/dev/null 2>&1 || true
-            sleep 1
-            walk_screen "api$API-02-cards-alerts"
-            walk_screen "api$API-03-radar" '雷达' '云图' 'Radar'
+            # 首页下滑：气象灾害预警卡片 + 降雨趋势与云图卡片（这两块只在首页滚动区里，没有独立入口）
+            scroll_and_shot "api$API-02-cards-alerts-cloudmap"
 
-            back
-            walk_screen "api$API-04-settings" '设置' 'Settings' '@rightmost-top'
-            walk_screen "api$API-05-appearance" '外观与主题' '应用与界面'
-            walk_screen "api$API-06-theme-color" '主题色彩'
-            back
-            back
-            walk_screen "api$API-07-timezone" '时区' '显示与更新'
-            back
-            walk_screen "api$API-08-about" '关于'
-            walk_screen "api$API-09-legal-doc" '隐私政策' '用户协议'
-            back
-            back
-            walk_screen "api$API-10-ai" 'AI 模型' '闲聊 AI' '闲聊' 'AI'
+            # dashboard -> 设置（dashboard 顶部图标 desc 可能为空，退到顶部栏最右侧可点击节点）
+            walk_screen "api$API-03-settings" '@scrollup' '@scrollup' '设置' 'Settings' '@rightmost-top'
+            # 设置 -> 外观与主题 -> 主题色彩
+            walk_screen "api$API-04-appearance" '外观与主题'
+            walk_screen "api$API-05-theme-color" '主题色彩'
+            # 回到设置根页 -> 显示与更新 -> 时区
+            if back_to_settings; then
+              walk_screen "api$API-06-display-refresh" '显示与更新'
+              walk_screen "api$API-07-timezone" '时区'
+            fi
+            # 回到设置根页 -> 语音与音色
+            if back_to_settings; then
+              walk_screen "api$API-08-voice" '语音与音色'
+            fi
+            # 回到设置根页 -> 天气数据供应商
+            if back_to_settings; then
+              walk_screen "api$API-09-providers" '天气数据供应商'
+            fi
+            # 回到设置根页 -> AI 天气建议
+            if back_to_settings; then
+              walk_screen "api$API-10-ai-advice" 'AI 天气建议' '@scroll' 'AI 天气建议'
+            fi
+            # 回到设置根页 -> 通知提醒（可能在下方分组，需要滚动）
+            if back_to_settings; then
+              walk_screen "api$API-11-notifications" '通知提醒' '@scroll' '通知提醒'
+            fi
+            # 回到设置根页 -> 关于 -> 隐私政策（法律文档）
+            if back_to_settings; then
+              walk_screen "api$API-12-about" '关于' '@scroll' '关于'
+              walk_screen "api$API-13-legal-docs" '隐私政策' '用户使用协议'
+            fi
 
             adb -s "$SERIAL" logcat -d -v threadtime 2>/dev/null \
               | grep -Ei 'FATAL EXCEPTION|ANR in |E/AndroidRuntime' > "qa/logcat-api$API.txt" || true
-            crash=$(wc -l < "qa/logcat-api$API.txt" 2>/dev/null || echo 0)
-            shots=$(find "$OUT" -maxdepth 1 -name "api$API-*.png" | wc -l)
-            noprogress=$(grep -c "api$API-.*nav=no-progress" qa/walkthrough-result.txt 2>/dev/null)
-            [ -n "$noprogress" ] || noprogress=0
-            if [ "$crash" -eq 0 ]; then
-              echo "android-$API status=ok shots=$shots no_progress_steps=$noprogress crash_lines=0" \
-                >> qa/walkthrough-result.txt
-            else
-              echo "::warning::android-$API logcat 里有 $crash 行 FATAL/ANR，见 qa/logcat-api$API.txt"
-              echo "android-$API status=crash-lines shots=$shots no_progress_steps=$noprogress crash_lines=$crash" \
-                >> qa/walkthrough-result.txt
-            fi
+            summarize_tier "$API" >> qa/walkthrough-result.txt
 
             /usr/local/bin/neribot-emulator.sh stop "$API" >/dev/null 2>&1 || true
           done
@@ -890,8 +1038,11 @@ jobs:
             echo "  - 两种情况的原始日志都在 qa/roborazzi-record.log 或 qa/roborazzi-verify.log。"
             echo "  - 门禁用 --rerun-tasks 强制真跑，并用测试报告 XML 证明真的跑过（pixel-status 里有 tests= 用例数）；"
             echo "    看到 pixel_status=verify-no-tests / capture-no-tests 说明门禁没能真正执行，按环境问题写进报告，不要当成通过。"
-            echo "真机走查："
+            echo "真机走查（每档一行，status 就是走查可信度）："
             echo "$WALK"
+            echo "  status=ok 才是全部走通；status=degraded 表示有界面 no-progress（清单在 no_progress_screens= 里）；"
+            echo "  status=wrong-app 表示点击时前台已经不是本 app（已被前台校验拦下）；status=onboarding-blocked 表示首启预处理失败。"
+            echo "  只要不是 ok，就必须把没走通的界面数量与名称写进【环境与范围】，不允许把整段走查描述成成功。"
             echo "logcat 致命错误/ANR：qa/logcat-api30.txt、qa/logcat-api35.txt"
             echo "已知缺陷（流水线在走查里实测到，必须原样写进【审阅发现】的 P2）："
             echo "$(cat qa/known-findings.txt 2>/dev/null || echo '（无）')"
@@ -903,7 +1054,11 @@ jobs:
             echo "     ./gradlew :app:testDebugUnitTest --console=plain"
             echo "   每条命令的结果与关键日志行记进报告。"
             echo "3. 真机走查（必须真做，不能只读代码）：模拟器与 APK 已经由流水线启动并安装好，$NERIBOT_UI_OUT_DIR 里有每屏截图。请按屏走查这些界面："
-            echo "   首页 / 气象灾害预警 / 雷达云图 / 设置 / 外观与主题（主题色彩、外观预设）/ 时区 / 法律文档（隐私政策、用户协议）/ 闲聊 AI。"
+            echo "   实际走查清单（本仓库真实存在的界面，按层级）："
+            echo "     首页 dashboard -> 首页下滑（气象灾害预警卡片 + 降雨趋势与云图卡片，这两块没有独立入口，只能靠滚动取证）"
+            echo "     -> 设置 -> 外观与主题 -> 主题色彩 -> back -> 显示与更新 -> 时区 -> back -> 语音与音色 -> back"
+            echo "     -> 天气数据供应商 -> back -> AI 天气建议 -> back -> 通知提醒 -> back -> 关于 -> 隐私政策/用户使用协议。"
+            echo "   注意：没有「雷达」「闲聊 AI」这类独立页面，报告里不要出现这类不存在的界面名。"
             echo "   每一屏至少一张截图；必要时自己启动模拟器复现、补截图、抓 uiautomator dump。"
             echo "   如果截图/dump 里仍然出现 Choose your language / 选择你的语言（首启覆盖层），说明流水线的 onboarding 预处理失败了："
             echo "   把它当成环境问题写进【环境与范围】并说明影响范围，不要继续盲点那个点不到的 Next 按钮。"
