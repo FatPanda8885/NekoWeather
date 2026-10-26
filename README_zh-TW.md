@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="app/src/main/res/drawable/neko1.jpeg" width="132" alt="NekoWeather">
+  <img src="docs/icon.png" width="120" alt="NekoWeather">
 </p>
 
 <h1 align="center">貓貓風雨 <sub>NekoWeather</sub></h1>
@@ -31,10 +31,6 @@
   <img src="docs/screenshots/cards-alerts.webp" width="240" alt="警報與雷達">
   &nbsp;
   <img src="docs/screenshots/ai-advice.webp" width="240" alt="AI 建議">
-</p>
-
-<p align="center">
-  <sub>🚧 官方 App 圖示仍在製作中，上方為暫代吉祥物。</sub>
 </p>
 
 ---
