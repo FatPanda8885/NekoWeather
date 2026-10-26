@@ -8,18 +8,21 @@
 # 密钥:     不使用任何 GitHub secret。GH_TOKEN（bot 账号 PAT）与 DEEPSEEK_API_KEY 由 runner 容器注入，
 #           ——本 workflow 不得在 env 里引用它们，空的 secret 会覆盖容器注入的值。
 #
-# 触发:
-#   1. issue opened / labeled                       -> 自动开始复现调查
+# 触发（一律按需，默认不跑；不订阅 issues.opened —— 服务器常开之前，每开一个 issue
+#       就排一个永远 Queued 的 job 没有意义）:
+#   1. 给 issue 打 neribot / qa 标签（大小写四种写法）  -> 开始复现调查
 #   2. 在 issue（不是 PR）下评论 @NeriBot 或 /investigate -> 重新调查，排除 bot 自己
 # 授权: 只有仓库 owner 本人，或 author_association 为 OWNER/MEMBER 的人能触发，其余静默跳过（不是失败）。
+#       打标签本身就需要 triage/write 权限，因此 labeled 分支同样只认这两种身份。
 # 产物: 只在 issue 下留一条带 ISSUE_MARKER 的报告评论；不改标题/标签/状态，不碰任何 PR。
 # 部署与运维文档: https://github.com/FatPanda8885/NeriBot
 
 name: NeriBot Issue QA
 
 on:
+  # 只认「打 neribot / qa 标签」，不订阅 opened
   issues:
-    types: [opened, labeled]
+    types: [labeled]
   issue_comment:
     types: [created]
 
@@ -36,7 +39,11 @@ jobs:
   investigate:
     if: >-
       (github.event_name == 'issues' &&
-       (github.event.issue.user.login == github.repository_owner ||
+       (github.event.label.name == 'neribot' ||
+        github.event.label.name == 'NeriBot' ||
+        github.event.label.name == 'qa' ||
+        github.event.label.name == 'QA') &&
+       (github.event.sender.login == github.repository_owner ||
         github.event.issue.author_association == 'OWNER' ||
         github.event.issue.author_association == 'MEMBER')) ||
       (github.event_name == 'issue_comment' &&
