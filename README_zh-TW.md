@@ -1,244 +1,227 @@
 <p align="center">
-  <img src="app/src/main/res/drawable/neko1.jpeg" width="140" alt="NekoWeather">
+  <img src="app/src/main/res/drawable/neko1.jpeg" width="132" alt="NekoWeather">
+</p>
+
+<h1 align="center">貓貓風雨 <sub>NekoWeather</sub></h1>
+
+<p align="center">
+  <b>把天氣資料、動態降雨雷達、AI 建議與 Live2D 角色放進同一屏的開源 Android 天氣 App</b><br>
+  <sub>Kotlin · Jetpack Compose · Material 3 &nbsp;|&nbsp; 免帳號 · 無廣告 · 無追蹤</sub>
 </p>
 
 <p align="center">
-  <strong style="font-size: 2em;">NekoWeather</strong>
-  <br>
-  <span style="font-size: 1.3em;">貓貓風雨</span>
+  <a href="https://github.com/FatPanda8885/NekoWeather/releases"><img src="https://img.shields.io/github/v/release/FatPanda8885/NekoWeather?label=release&color=blue" alt="release"></a>
+  <img src="https://img.shields.io/badge/license-GPL--3.0-orange" alt="license">
+  <img src="https://img.shields.io/badge/Android-8.0%2B%20(API%2026)-3DDC84?logo=android&logoColor=white" alt="android">
+  <img src="https://img.shields.io/badge/Compose-Material%203-4285F4" alt="compose">
+  <img src="https://img.shields.io/badge/i18n-4%20languages-blueviolet" alt="i18n">
+  <a href="https://github.com/FatPanda8885/NekoWeather/actions/workflows/ci.yml"><img src="https://github.com/FatPanda8885/NekoWeather/actions/workflows/ci.yml/badge.svg" alt="ci"></a>
 </p>
 
 <p align="center">
-  <em>🚧 正式應用程式圖示正在製作中，上方為暫用吉祥物圖片。</em>
-</p>
-
----
-
-<p align="center">
-  <a href="README.md">English</a> ·
   <a href="README_zh-CN.md">简体中文</a> ·
-  <a href="README_ja.md">日本語</a>
+  <b>繁體中文</b> ·
+  <a href="README_ja.md">日本語</a> ·
+  <a href="README.md">English</a>
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/dashboard.webp" width="240" alt="首頁">
+  &nbsp;
+  <img src="docs/screenshots/cards-alerts.webp" width="240" alt="警報與雷達">
+  &nbsp;
+  <img src="docs/screenshots/ai-advice.webp" width="240" alt="AI 建議">
+</p>
+
+<p align="center">
+  <sub>🚧 官方 App 圖示仍在製作中，上方為暫代吉祥物。</sub>
 </p>
 
 ---
 
-**NekoWeather（貓貓風雨）** 是一款功能豐富的開放原始碼 Android 天氣應用程式，使用 Kotlin 和 Jetpack Compose 構建。它將詳盡的天氣資料、互動式地圖、AI 驅動的天氣建議和 Live2D 動態角色模型融為一體，呈現為沉浸式單一儀表板介面。**無需註冊帳號，無廣告，無追蹤。**
+## ✨ 一眼看懂
 
----
+| 你關心的 | 貓貓風雨怎麼做 |
+| --- | --- |
+| **隱私** | 免帳號、無廣告、無埋點。設定、城市、金鑰全部存在本機，不向任何自有伺服器回報 |
+| **資訊密度** | 一屏給齊：即時天氣 + 24 小時 + 15 日 + 空氣品質 + 日出日落 + 太陽高度弧線 + 降雨機率圖 |
+| **資料源自由** | Open-Meteo 免金鑰即可用；可切換和風天氣；也能自填 endpoint + JSON 路徑範本接任意 API |
+| **沉浸感** | 以 Cubism SDK 5 驅動的 Live2D 角色：動作、表情、物理、呼吸、眨眼、視線跟隨、點擊回饋，外加可視化佈局編輯器 |
+| **可玩性** | 自訂字型 / LOGO / 靜態或影片背景 / 依天氣切換背景 / 啟動圖示 / 離線 VITS-Piper 語音模型 |
+| **不綁死** | 4 語言介面、ZIP 備份還原、API 用量統計與配額、GitHub + Gitee 雙通道發佈 |
 
-## 功能特性
+## 🚀 30 秒上手
 
-### 🌤 天氣儀表板
-- 即時天氣狀況，配合動態天氣場景（雲飄、雨落、雪飄、陽光光暈）
-- 24 小時每小時預報，包含溫度、降雨機率和風力
-- 15 天每日預報，包含最高/最低溫度、天氣狀況和日出/日落
-- 空氣品質指數，包含 PM2.5、PM10、NO₂、O₃、SO₂（支援美標/歐標 AQI）
-- 風力、風向、濕度、氣壓、能見度和紫外線指數
-- 互動式太陽高度角弧線圖
-- 互動式降雨機率/預計降雨量圖表
+1. **安裝**：從 [GitHub Releases](https://github.com/FatPanda8885/NekoWeather/releases)（或 [Gitee 鏡像](https://gitee.com/pasky/NekoWeather/releases)）下載對應 ABI 的 APK。
+2. **開啟**：首次啟動選擇介面語言 → 允許定位（也可拒絕，手動搜尋城市同樣可用）。
+3. **使用**：首頁下拉更新；右上角依序為 **更新 / 語音播報 / 設定**。
 
-### 🗺 即時降雨雷達
-- 動畫降雨雷達疊加層（RainViewer）
-- 多種底圖供應商：OpenStreetMap、高德地圖、花瓣地圖（華為）、百度地圖
-- 自動模式：中國大陸使用高德地圖，其他地區使用 OSM
+> 預設資料源 Open-Meteo **不需要任何 API Key**，安裝後即可使用。
+
+## 🎯 核心能力
+
+### 🌤 一屏到底的天氣儀表板
+
+即時天氣 + 動態天氣場景（雲、雨、雪、日光）· 24 小時逐時預報（溫度 / 降雨機率 / 風力）· 15 日預報（高低溫、天氣、日出日落）· 空氣品質（PM2.5 / PM10 / NO₂ / O₃ / SO₂，US & EU 雙標準）· 風速風向、濕度、氣壓、能見度、紫外線 · 可互動的太陽高度弧線與降雨機率 / 雨量圖。
+
+<img src="docs/screenshots/dashboard.webp" width="300" alt="首頁">
+
+### 🗺 動態降雨雷達與警報卡片
+
+RainViewer 動畫降雨圖層；底圖可切換 **OpenStreetMap / 高德 / 花瓣地圖（華為）/ 百度**，並提供「中國大陸用高德、其他地區用 OSM」的自動模式。危害警報卡片支援 **自動（依地區選 NWS / DWD）/ 和風 / 自訂 GeoJSON·CAP / 關閉**。
+
+<img src="docs/screenshots/cards-alerts.webp" width="300" alt="警報與雷達">
 
 ### 🤖 AI 天氣建議
-- 相容 Anthropic Messages API（支援 Claude、DeepSeek 及相容閘道）
-- 可設定端點、模型、系統提示詞和輸出長度
-- 打字機動畫效果顯示 AI 回覆，支援 Markdown 渲染
-- 情境感知：綜合當前天氣、每小時/每日預報、空氣品質和警報
 
-### 🎭 Live2D 動態角色
-- 完整 Cubism SDK 5 執行時期整合
-- 支援透過 ZIP 匯入多個 Live2D 模型
-- 視覺化版面配置編輯器（位置、大小、旋轉角度）
-- 支援動作、表情、物理、呼吸、眨眼、觸控視線和點擊回饋
+相容 **Anthropic Messages API** 的服務都能接（Claude、DeepSeek 及各式相容閘道）：端點、模型、系統提示詞、輸出長度皆可設定；回覆具打字機動畫與 Markdown 渲染，並把即時天氣、逐時 / 15 日預報、空氣品質、警報一併作為上下文。
+
+<img src="docs/screenshots/ai-advice.webp" width="300" alt="AI 建議">
+
+### 🎭 Live2D 角色
+
+完整的 **Cubism SDK for Java 5** 執行環境：支援以 ZIP 匯入多個模型、可視化佈局編輯器（位置 / 縮放 / 旋轉），動作、表情、物理、呼吸、眨眼、視線跟隨與點擊回饋全部可用。
+
+### 🌍 資料源與警報
+
+| 類別 | 可選 |
+| --- | --- |
+| 天氣資料 | Open-Meteo（預設，免金鑰）· 和風天氣（需金鑰）· 自訂 endpoint + JSON 路徑擷取 |
+| 危害警報 | 自動（NWS / DWD 依地區）· 和風 · 自訂 GeoJSON / CAP · 關閉 |
+
+<img src="docs/screenshots/providers.webp" width="300" alt="資料源">
 
 ### 🎨 深度自訂
-- 自訂字型 — 完全替換系統字型
-- 自訂首頁 Logo
-- 自訂靜態圖片或影片動態背景
-- 按天氣狀況切換背景（雷、雪、雨、霧、雲、晴）
-- 自訂桌面捷徑圖示
 
-### 🔊 TTS 與音色
-- 系統 TTS 引擎朗讀天氣
-- 匯入自訂離線 VITS/Piper ONNX 語音模型
+整套系統字型替換 · 自訂首頁 LOGO · 靜態或影片背景 · 依天氣條件（雷 / 雪 / 雨 / 霧 / 多雲 / 晴）分別設定背景 · 自訂桌面捷徑圖示。
 
-### 🌍 多供應商架構
-- **Open-Meteo** — 預設，無需 API Key
-- **和風天氣 (QWeather)** — 可選，需 API Key
-- **自訂範本** — 定義自己的端點和 JSON 路徑擷取
-- 警報：自動（按地區選擇 NWS/DWD）、和風天氣、自訂 GeoJSON/CAP、或關閉
+<img src="docs/screenshots/theme-color.webp" width="300" alt="主題">
 
-### 📢 通知提醒
-- 每日早晨天氣
-- 週日下週預覽
-- 降雨機率提醒
-- 氣象災害警報
-- 通知發送歷史
-- 重新啟動後持續執行
+### 🔊 語音與 TTS
 
-### 🌐 多語言
-完整 UI 在地化，支援 **4 種語言**：
-- 简体中文
-- 繁體中文
-- English
-- 日本語
+以系統 TTS 朗讀天氣；可匯入自訂離線 **VITS / Piper ONNX** 語音模型。
 
-### 💾 備份與還原
-- 選擇設定類別並匯出為 ZIP
-- 從備份檔案還原
-- 涵蓋設定、城市、供應商設定、AI 設定和語音模型
+### 📢 通知與提醒
 
-### 📊 API 請求統計
-- 按供應商、網域分別統計
-- 每日、每週、每月使用統計
-- 可選配額限制
+每日晨間天氣、週日週報、降雨機率提醒、危害警報提醒，附通知歷史，重新開機後仍有效。
 
-### 🏙 城市管理
-- 全球城市搜尋（Open-Meteo Geocoding）
-- GPS 自動定位
-- 多個已儲存城市，首頁左右滑動切換
+<img src="docs/screenshots/notifications.webp" width="300" alt="通知">
 
----
+### 💾 備份 · 統計 · 多城市
 
-## 📜 法律與授權
+ZIP 分類備份還原（設定 / 城市 / 資料源 / AI / 語音模型）· 依資料源與網域統計 API 呼叫量（日 / 週 / 月，可設配額）· Open-Meteo 全球城市搜尋、GPS 定位、多城市首頁滑動切換。
 
-本專案依據 **GNU General Public License v3.0（GPLv3）** 分發。詳見 [LICENSE](LICENSE)。
-
-**使用 NekoWeather 即代表您同意以下檔案：**
-
-| 檔案 | 說明 |
-|---|---|
-| [使用者使用協議](app/src/main/assets/terms_of_use_zh-TW.md) | 免責聲明、使用者責任、第三方內容 |
-| [隱私權政策](app/src/main/assets/privacy_policy_zh-TW.md) | 資料處理方式 — 本應用程式不收集任何個人資訊 |
-| [第三方內容使用說明](app/src/main/assets/third_party_notice_zh-TW.md) | 所有第三方元件的授權與歸屬 |
-
-> ⚠️ **重要提示：** NekoWeather 按「現狀」提供，不附帶任何形式的擔保。開發者對天氣資料的準確性、地圖邊界、AI 生成內容或任何第三方服務不承擔任何責任。使用前請仔細閱讀使用者使用協議。
-
----
-
-## 🌐 官方網站
-
-官方網站正在 **開發中**，暫時無法存取。
-
-- 網址：[https://nekoweather.12am.moe](https://nekoweather.12am.moe) *（即將上線）*
-
-請關注 GitHub 倉庫取得最新動態。
-
----
+<img src="docs/screenshots/settings.webp" width="300" alt="設定">
 
 ## 📦 下載
 
-**唯一官方分發管道：**
+| 管道 | 位址 |
+| --- | --- |
+| **GitHub Releases** | <https://github.com/FatPanda8885/NekoWeather/releases> |
+| **Gitee Releases**（中國大陸鏡像） | <https://gitee.com/pasky/NekoWeather/releases> |
 
-| 平台 | 網址 |
-|---|---|
-| **GitHub Releases** | [github.com/FatPanda8885/NekoWeather/releases](https://github.com/FatPanda8885/NekoWeather/releases) |
-| **Gitee Releases** | [gitee.com/pasky/NekoWeather/releases](https://gitee.com/pasky/NekoWeather/releases)（中國境內鏡像） |
+> ⚠️ 以上是**唯二的官方發佈管道**。第三方商店、下載站、論壇提供的 APK 可能被重新打包，不保證安全與正版。
 
-> ⚠️ 開發者僅對以上兩個管道發布的版本負責。透過任何其他管道（第三方應用程式商店、下載網站、論壇等）取得的 APK 可能遭到竄改，開發者**不保證**其安全性和真實性。
+## 🛠 從原始碼建置
 
----
-
-## 🛠 從原始碼構建
-
-### 環境需求
-
-| 工具 | 版本 |
-|---|---|
-| **Android Studio** | 最新穩定版 |
-| **JDK** | 17 |
-| **Android SDK** | 35 (compileSdk) |
-| **Kotlin** | 2.1.20 |
-| **Gradle** | 8.7+（已包含 wrapper） |
-
-### 構建步驟
+| 依賴 | 版本 |
+| --- | --- |
+| Android Studio | 最新穩定版 |
+| JDK | 17 |
+| Android SDK | 35（compileSdk） |
+| Kotlin | 2.1.20 |
+| Gradle | 8.11（wrapper 內附） |
 
 ```bash
-# 1. 複製倉庫
 git clone https://github.com/FatPanda8885/NekoWeather.git
 cd NekoWeather
 
-# 2. （可選）設定 Live2D Cubism SDK
-# 從 https://www.live2d.com/ 下載 CubismSdkForJava-5-r.5.zip
-# 解壓縮到專案根目錄的 .cubism-sdk/ 資料夾
-# 該 SDK 非必須 — 如未設定，構建時會自動跳過
+# 選用：Live2D Cubism SDK（缺少時自動退回無 Live2D 的 lite 源集，仍可正常編譯）
+# 自 https://www.live2d.com/ 下載 CubismSdkForJava-5-r.5.zip，解壓到 .cubism-sdk/
 
-# 3. 構建 Debug APK
-./gradlew assembleDebug
-
-# 4. 或構建 Release APK（需要簽章設定）
-# ./gradlew assembleRelease
+./gradlew assembleDebug     # 產物：app/build/outputs/apk/debug/
+./gradlew assembleRelease   # 需 signing/keystore.properties
 ```
 
-APK 位於 `app/build/outputs/apk/debug/app-debug.apk`。
+**執行需求**：Android 8.0（API 26）以上；ABI 支援 arm64-v8a / x86 / x86_64（release 依 ABI 拆分並附通用包）。
 
-### 最低需求
-- **Android 8.0 (API 26)** 或更高
-- **ABI：** arm64-v8a、x86、x86_64
+## 🏗 技術棧
 
----
+| 面向 | 選型 |
+| --- | --- |
+| 語言 / UI | Kotlin 2.1.20 · Jetpack Compose（Material 3） |
+| 架構 | MVVM：ViewModel + StateFlow 單一狀態源 |
+| 網路 | OkHttp 4 |
+| 序列化 | 手寫 JSON 解析（`org.json`）+ JSON 路徑擷取器 |
+| 儲存 | SharedPreferences（`ConfigStore` / `WeatherCacheStore` 等） |
+| 渲染 | Live2D Cubism SDK for Java 5（選用，條件編譯） |
+| 混淆 | ProGuard（release） |
 
-## 🏗 架構
-
-- **語言：** Kotlin
-- **UI 框架：** Jetpack Compose + Material 3
-- **架構模式：** MVVM（ViewModel + StateFlow）
-- **HTTP 客戶端：** OkHttp 4
-- **序列化：** 手動 JSON 解析（org.json）
-- **本機儲存：** SharedPreferences（透過 ConfigStore）
-- **Live2D 整合：** Cubism SDK for Java 5（可選，條件編譯）
-- **程式碼壓縮：** ProGuard（Release 構建）
-
----
-
-## 📄 開放原始碼授權
+<details>
+<summary>專案結構（點擊展開）</summary>
 
 ```
-NekoWeather（貓貓風雨）— Android 天氣應用程式
-Copyright (C) 2026  NekoWeather 貢獻者
-
-本程式是自由軟體：您可以依據自由軟體基金會發布的
-GNU 通用公眾授權條款（第三版或任意更新版本）的條款，
-對其進行再發布和/或修改。
-
-本程式的分發是基於「有用」的目的，但不附帶任何擔保；
-甚至不包含對適售性或特定用途適用性的默示擔保。
-詳情請參閱 GNU 通用公眾授權條款。
+app/src/main/java/com/neko/weather/
+├── MainActivity.kt              # 入口
+├── model/Models.kt              # 資料模型、列舉、DTO
+├── data/                        # WeatherRepository / AlertRepository / AiAdviceRepository
+│                                # CityRepository / ConfigStore / ApiUsageTracker
+│                                # BackupManager / UpdateRepository
+├── ui/                          # NekoWeatherApp（全部畫面）/ MainViewModel
+│                                # Localization / Onboarding / LegalDocuments
+├── notification/WeatherNotificationService.kt
+└── tts/VoiceModelManager.kt
 ```
 
-詳見 [LICENSE](LICENSE) 取得 GPLv3 完整文字。
+</details>
 
----
+## ❓ 常見問題
 
-## 🤖 AI 輔助聲明
+**需要註冊帳號嗎？** 不需要，也沒有帳號系統。
 
-本專案在開發過程中使用了 AI/LLM 工具輔助，包括但不限於：
+**會蒐集我的資料嗎？** 不會。App 只在你查看天氣時，向你**自己設定的**資料源與 AI 端點發出請求，其餘資料留在本機。詳見[隱私政策](app/src/main/assets/privacy_policy.md)。
 
-- **OpenAI Codex**
-- **DeepSeek**
+**AI 建議的金鑰存在哪？** 以明文存於本機 SharedPreferences（設定頁有提示）。不想用就不要設定，功能會自動隱藏。
 
-上述工具用於程式碼生成、翻譯、文檔起草及開發流程支援。所有 AI 生成的內容均已經過人工審核與驗證。
+**沒有 Live2D Cubism SDK 能編譯嗎？** 能。缺少 SDK 時建置會自動走 `lite` 源集（無 Live2D 畫面），不會報錯。
 
----
+**為什麼 release 有多個 APK？** 依 ABI 拆分（arm64-v8a / x86 / x86_64）以縮小體積，另附一個通用包。
+
+**天氣資料準嗎？** 取決於你選的資料源；App 不做二次修正，請以資料源與官方警報為準。
+
+## 📜 授權與法律文件
+
+本專案以 **GNU General Public License v3.0（GPLv3）** 發佈，全文見 [LICENSE](LICENSE)。
+
+| 文件 | 說明 |
+| --- | --- |
+| [使用者條款](app/src/main/assets/terms_of_use.md) | 免責、使用者責任、第三方內容 |
+| [隱私政策](app/src/main/assets/privacy_policy.md) | 資料處理說明：不蒐集個人資訊 |
+| [第三方聲明](app/src/main/assets/third_party_notice.md) | 第三方元件授權與署名 |
+
+> ⚠️ **貓貓風雨依「現狀」提供，不附任何擔保。** 開發者不對天氣資料準確性、地圖邊界、AI 生成內容或任何第三方服務負責。
+
+## 🌐 官方網站
+
+<https://nekoweather.12am.moe>（建置中，暫不可用）——最新動態請以本儲存庫為準。
+
+## 🤖 AI 使用揭露
+
+本專案在開發過程中使用 AI / LLM 工具輔助，包括但不限於 **OpenAI Codex** 與 **DeepSeek**，用於程式碼生成、翻譯、文件撰寫與工作流程支援。所有 AI 產出均已由人類開發者審查與驗證。
 
 ## 🙏 致謝
 
-NekoWeather 建立在眾多優秀開放原始碼專案和服務之上：
-
 - [Open-Meteo](https://open-meteo.com/) — 免費天氣與空氣品質 API
-- [RainViewer](https://www.rainviewer.com/) — 免費降雨雷達資料
+- [RainViewer](https://www.rainviewer.com/) — 免費降雨雷達
 - [OpenStreetMap](https://www.openstreetmap.org/) — 免費地圖資料
-- [Jetpack Compose](https://developer.android.com/compose) — 現代 Android UI 工具包
+- [Jetpack Compose](https://developer.android.com/compose) — Android 現代 UI 工具包
 - [OkHttp](https://square.github.io/okhttp/) — HTTP 客戶端
-- [Live2D Cubism SDK](https://www.live2d.com/) — 動態角色執行時期
+- [Live2D Cubism SDK](https://www.live2d.com/) — 角色動畫執行環境
 
-完整清單請參閱 [第三方內容使用說明](app/src/main/assets/third_party_notice_zh-TW.md)。
+完整清單見[第三方聲明](app/src/main/assets/third_party_notice.md)。
 
 ---
 
 <p align="center">
-  <sub>用 ❤️ 製作 · <a href="https://github.com/FatPanda8885/NekoWeather">GitHub</a> · <a href="https://gitee.com/pasky/NekoWeather">Gitee</a></sub>
+  <sub>Made with ❤️ · <a href="https://github.com/FatPanda8885/NekoWeather">GitHub</a> · <a href="https://gitee.com/pasky/NekoWeather">Gitee</a></sub>
 </p>
