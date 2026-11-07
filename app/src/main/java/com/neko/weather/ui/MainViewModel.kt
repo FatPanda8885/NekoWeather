@@ -584,10 +584,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
                 .onSuccess { file ->
                     _state.update { it.copy(updateDownloading = false, updateProgress = null) }
-                    val launched = runCatching { ApkUpdater.install(app, file) }.getOrDefault(false)
-                    if (!launched) {
-                        _state.update { it.copy(message = "请允许 NekoWeather 安装未知应用，然后重新点击立即更新") }
-                    }
+                    runCatching { ApkUpdater.verify(app, file) }
+                        .onFailure { error ->
+                            // 校验不过的文件不要留在缓存里，也不要交给安装器
+                            file.delete()
+                            _state.update { it.copy(message = error.message ?: "更新文件校验失败") }
+                        }
+                        .onSuccess {
+                            val launched = runCatching { ApkUpdater.install(app, file) }.getOrDefault(false)
+                            if (!launched) {
+                                _state.update { it.copy(message = "请允许 NekoWeather 安装未知应用，然后重新点击立即更新") }
+                            }
+                        }
                 }
                 .onFailure { error ->
                     _state.update {
