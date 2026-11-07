@@ -136,6 +136,7 @@ jobs:
           COMMENT_BODY: ${{ github.event.comment.body }}
           HEAD_SHA_EVENT: ${{ github.event.pull_request.head.sha }}
         run: |
+          set +e  # runner 用 bash -e 跑步骤，这里显式关掉：成败由每步自己判定并 exit
           set -uo pipefail
           HEAD_SHA="${HEAD_SHA_EVENT:-}"
           if [ -z "$HEAD_SHA" ]; then
@@ -159,9 +160,16 @@ jobs:
 
           # 去重：同一 head SHA 已经有 NeriBot 的 review 就不再重复跑
           if [ "$PROCEED" = "true" ] && [ -n "$HEAD_SHA" ]; then
-            DONE=$(gh api --paginate "repos/$REPO/pulls/$PR_NUMBER/reviews?per_page=100" \
+            # gh --paginate 每页输出一个数组，jq -s 得到「数组的数组」，所以要先 flatten。
+            # 去重只是优化：查询失败时宁可按「未 review」继续跑，也不要打断整条流水线。
+            DONE=$(gh api --paginate "repos/$REPO/pulls/$PR_NUMBER/reviews?per_page=100" 2>/dev/null \
               | jq -s --arg bot "$BOT_LOGIN" --arg sha "$HEAD_SHA" \
-                  'any((add // []); ((.user.login // "") == $bot) and ((.commit_id // "") == $sha))')
+                  'flatten | any((.user.login // "") == $bot and (.commit_id // "") == $sha)' \
+                  2>/dev/null) || DONE=""
+            if [ -z "$DONE" ]; then
+              echo "::warning::去重查询失败（gh/jq 异常），按未 review 处理，继续运行"
+              DONE=false
+            fi
             if [ "$DONE" = "true" ]; then
               echo "head $HEAD_SHA 已经有 NeriBot 的 review，跳过重复运行"
               echo "### 跳过：head $HEAD_SHA 已有 NeriBot review" >> "$GITHUB_STEP_SUMMARY"
@@ -188,6 +196,7 @@ jobs:
       - name: Preflight
         if: env.PROCEED == 'true'
         run: |
+          set +e  # runner 用 bash -e 跑步骤，这里显式关掉：成败由每步自己判定并 exit
           set -uo pipefail
           fail=0
           err() { echo "::error::$*"; fail=1; }
@@ -287,6 +296,7 @@ jobs:
         if: env.PROCEED == 'true'
         # 产出 INLINE_REQUESTED=true|false 到 $GITHUB_ENV；命中原因写在 qa/inline-request.txt
         run: |
+          set +e  # runner 用 bash -e 跑步骤，这里显式关掉：成败由每步自己判定并 exit
           set -uo pipefail
           mkdir -p qa
           {
@@ -340,6 +350,7 @@ jobs:
         if: env.PROCEED == 'true'
         # 构建失败要如实失败；后续步骤统一用 if: !cancelled() 保证 agent 仍然跑起来并写进 review
         run: |
+          set +e  # runner 用 bash -e 跑步骤，这里显式关掉：成败由每步自己判定并 exit
           set -uo pipefail
           mkdir -p qa
           build_status=0
@@ -382,6 +393,7 @@ jobs:
         # 结果就是基线被改了也 BUILD SUCCESSFUL（实测：--rerun 无效，--rerun-tasks 才真跑）。
         if: ${{ !cancelled() && env.PROCEED == 'true' }}
         run: |
+          set +e  # runner 用 bash -e 跑步骤，这里显式关掉：成败由每步自己判定并 exit
           set -uo pipefail
           BASELINE_DIR=app/src/test/screenshots
           ROBORAZZI_OUT=app/build/outputs/roborazzi
@@ -526,6 +538,7 @@ jobs:
         # 严格按镜像契约调用 neribot-emulator.sh，不自己拼 emulator 命令
         if: ${{ !cancelled() && env.PROCEED == 'true' }}
         run: |
+          set +e  # runner 用 bash -e 跑步骤，这里显式关掉：成败由每步自己判定并 exit
           set -uo pipefail
           OUT="$NERIBOT_UI_OUT_DIR"
           WORK=qa/device
@@ -1243,6 +1256,7 @@ jobs:
           NERIBOT_IMAGE_FALLBACK_REPO: FatPanda8885/NeriBot
           NERIBOT_IMAGE_TAG: qa-assets
         run: |
+          set +e  # runner 用 bash -e 跑步骤，这里显式关掉：成败由每步自己判定并 exit
           set -uo pipefail
           OUT="$NERIBOT_UI_OUT_DIR"
           IMAGES_MD=qa/images.md
@@ -1393,6 +1407,7 @@ jobs:
           NERIBOT_AVD_LIST: 'neribot-api30,neribot-api35'
           NERIBOT_API_LIST: '30,35'
         run: |
+          set +e  # runner 用 bash -e 跑步骤，这里显式关掉：成败由每步自己判定并 exit
           set -uo pipefail
           set +e
           python3 /usr/local/bin/neribot_agent.py qa-prompt.txt > qa-agent.log 2>&1
@@ -1408,13 +1423,15 @@ jobs:
         if: ${{ !cancelled() && env.PROCEED == 'true' }}
         run: |
           set -euo pipefail
-          POSTED=$(gh api --paginate "repos/$REPO/pulls/$PR_NUMBER/reviews?per_page=100" \
+          # add 同时兼容「每页一个数组」与「单文档即数组」两种形状；
+          # 查询本身失败时置空，让下面的分支给出可读原因而不是被 -e 直接掐死。
+          POSTED=$(gh api --paginate "repos/$REPO/pulls/$PR_NUMBER/reviews?per_page=100" 2>/dev/null \
             | jq -s 'add // []' \
             | jq --arg bot "$BOT_LOGIN" --arg marker "$QA_MARKER" '
                 any(.[];
                   ((.user.login // "") == $bot)
                   and .state != "PENDING"
-                  and ((.body // "") | contains($marker)))')
+                  and ((.body // "") | contains($marker)))' 2>/dev/null) || POSTED=""
 
           # inline 校验：仅在要求 inline 时检查，且只警告不判定失败
           INLINE_FLAG="${INLINE_REQUESTED:-false}"
