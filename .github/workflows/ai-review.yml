@@ -281,14 +281,31 @@ jobs:
           ref: ${{ env.HEAD_SHA }}
 
 
-      - name: Link Cubism SDK
+      - name: Link Cubism SDK（复制到可写位置再软链）
         if: env.PROCEED == 'true'
-        # .gitignore 排除了 .cubism-sdk，常驻 /opt，checkout 后符号链接进来
-        # 工作区目录也在这一步之后才建（checkout 会 git clean -ffdx 清掉未跟踪文件）
+        # :cubismFramework 是 include 进来的子项目，Gradle 会往它的 projectDir 里写 build/。
+        # 镜像里的 /opt/cubism-sdk 属于 root 且不可写，直接 ln 过去会让第一个要建目录的 task 失败：
+        #   writeDebugAarMetadata: Failed to create parent directory '....cubism-sdk/.../framework/build'
+        # 所以先复制一份到可写位置，再按原来的层级 <root>/.cubism-sdk/<sdk>/... 软链，
+        # 仓库里引用 .cubism-sdk 的相对路径不用改。
+        # 顺序同样重要：checkout 会 git clean -ffdx，清掉未跟踪的 .cubism-sdk。
         run: |
           set -euo pipefail
-          ln -sfn /opt/cubism-sdk .cubism-sdk
+          SRC=/opt/cubism-sdk
+          SDK=CubismSdkForJava-5-r.5
+          test -d "$SRC/$SDK" \
+            || { echo "::error::镜像缺少 $SRC/$SDK（放置方法见 NeriBot 仓库 README）"; exit 1; }
+          # 单 runner 串行执行，每次重建这一份就够，也不让 /tmp 越积越多
+          DST=/tmp/neribot-cubism
+          rm -rf "$DST"
+          mkdir -p "$DST"
+          cp -a "$SRC/." "$DST/"
+          rm -f .cubism-sdk
+          ln -sfn "$DST" .cubism-sdk
+          test -d ".cubism-sdk/$SDK/Framework/framework" \
+            || { echo "::error::.cubism-sdk/$SDK/Framework/framework 不存在，Cubism 目录结构不符"; exit 1; }
           mkdir -p qa "$NERIBOT_UI_OUT_DIR"
+          echo "cubism sdk -> $DST ($(du -sh "$DST" | cut -f1))"
           echo "work dir: qa/ + $NERIBOT_UI_OUT_DIR"
 
 
