@@ -158,8 +158,10 @@ jobs:
             esac
           fi
 
-          # 去重：同一 head SHA 已经有 NeriBot 的 review 就不再重复跑
-          if [ "$PROCEED" = "true" ] && [ -n "$HEAD_SHA" ]; then
+          # 去重：同一 head SHA 已经有 NeriBot 的 review 就不再重复跑。
+          # 只对自动触发（review_requested）生效：评论里的 /qa、@NeriBot 是人手明确要求的，必须照做，
+          # 否则同一个 head 上想重跑一次就再也跑不起来了。
+          if [ "$PROCEED" = "true" ] && [ -n "$HEAD_SHA" ] && [ "$EVENT_NAME" != "issue_comment" ]; then
             # gh --paginate 每页输出一个数组，jq -s 得到「数组的数组」，所以要先 flatten。
             # 去重只是优化：查询失败时宁可按「未 review」继续跑，也不要打断整条流水线。
             DONE=$(gh api --paginate "repos/$REPO/pulls/$PR_NUMBER/reviews?per_page=100" 2>/dev/null \
