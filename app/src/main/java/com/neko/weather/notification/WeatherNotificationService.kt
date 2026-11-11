@@ -21,6 +21,8 @@ import com.neko.weather.MainActivity
 import com.neko.weather.data.AppTimeZone
 import com.neko.weather.data.ConfigStore
 import com.neko.weather.data.WeatherRepository
+import com.neko.weather.data.WeatherCacheStore
+import com.neko.weather.model.DailyForecast
 import com.neko.weather.model.WeatherDashboard
 import com.neko.weather.model.TemperatureUnit
 import com.neko.weather.ui.localizedText
@@ -31,6 +33,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import java.time.DayOfWeek
 import java.time.LocalDate
+import java.time.temporal.TemporalAdjusters
 import java.time.LocalDateTime
 import kotlin.math.roundToInt
 
@@ -104,17 +107,23 @@ object WeatherNotificationPublisher {
         }
 
         if (settings.weeklyEnabled && now.dayOfWeek == DayOfWeek.SUNDAY && now.hour in 8..14 && prefs.getString("weekly", "") != today) {
-            val summary = weather.daily.drop(1).take(7).joinToString("；") { "${it.date.takeLast(5)} ${it.condition} ${formatTemperature(it.low, unit)}～${formatTemperature(it.high, unit)}" }
-            notify(context, 1002, "forecast", l("下周天气速览"), l(summary))
-            prefs.edit().putString("weekly", today).apply()
+            weeklyOverview(weather, now.toLocalDate())?.let { summary ->
+                notify(context, 1002, "forecast", l("下周天气速览"), l(summary))
+                prefs.edit().putString("weekly", today).apply()
+            }
         }
 
         if (settings.rainEnabled) {
-            val rain = weather.hourly.take(4).firstOrNull { (it.precipitationProbability ?: 0.0) >= 50.0 }
-            val rainKey = rain?.time.orEmpty()
-            if (rain != null && prefs.getString("rain", "") != rainKey) {
-                notify(context, 1003, "rain", l("即将降雨"), l("${rain.time.takeLast(5)} 前后降雨概率 ${rain.precipitationProbability?.roundToInt()}%，外出请带伞。"))
-                prefs.edit().putString("rain", rainKey).apply()
+            // 判据是逐小时预报的天气状况本身是否属于降水（雨/雪/雹/雷），不再看降水概率
+            val wet = weather.hourly.take(4).firstOrNull { isPrecipitation(it.condition) }
+            val wetKey = wet?.time.orEmpty()
+            if (wet != null && prefs.getString("rain", "") != wetKey) {
+                notify(
+                    context, 1003, "rain",
+                    l(precipitationTitle(wet.condition)),
+                    l(precipitationBody(wet.time.takeLast(5), wet.condition)),
+                )
+                prefs.edit().putString("rain", wetKey).apply()
             }
         }
 
@@ -126,6 +135,59 @@ object WeatherNotificationPublisher {
                 prefs.edit().putString("alerts", key).apply()
             }
         }
+    }
+
+    /**
+     * 下周概览：以哪种天气为主 + 气温相比本周怎么走。
+     *
+     * 只有未来预报、没有历史数据，而这条通知在周日发，所以「本周」用今天到本周日的
+     * 剩余预报天做基准；样本不足 2 天（周日当天就是这种情况）时退回与今天比较。
+     */
+    internal fun weeklyOverview(weather: WeatherDashboard, today: LocalDate): String? {
+        val nextWeek = weather.daily.drop(1).take(7)
+        if (nextWeek.isEmpty()) return null
+        val dominant = nextWeek.groupingBy { it.condition }.eachCount()
+            .entries.maxByOrNull { it.value }?.key
+            .orEmpty().ifBlank { nextWeek.first().condition }
+
+        val weekEnd = today.with(TemporalAdjusters.nextOrSame(DayOfWeek.SUNDAY))
+        val thisWeekRest = weather.daily.filter { day ->
+            val date = runCatching { LocalDate.parse(day.date) }.getOrNull() ?: return@filter false
+            !date.isBefore(today) && !date.isAfter(weekEnd)
+        }
+        val baseline = thisWeekRest.takeIf { it.size >= 2 } ?: weather.daily.take(1)
+        if (baseline.isEmpty()) return "下周以${dominant}为主。"
+
+        val delta = meanTemperature(nextWeek) - meanTemperature(baseline)
+        val trend = when {
+            delta >= 1.5 -> "，气温较本周上升"
+            delta <= -1.5 -> "，气温较本周下降"
+            else -> "，气温与本周基本持平"
+        }
+        return "下周以${dominant}为主$trend。"
+    }
+
+    private fun meanTemperature(days: List<DailyForecast>): Double =
+        days.map { (it.high + it.low) / 2 }.average()
+
+    /** 天气状况是否属于降水（雨、雪、冰雹、雷暴都算，含雨夹雪/阵雪/冻雨等组合）。 */
+    internal fun isPrecipitation(condition: String): Boolean =
+        listOf("雨", "雪", "雹", "雷").any { it in condition }
+
+    private fun precipitationTitle(condition: String): String = when {
+        "雪" in condition -> "即将降雪"
+        "雹" in condition -> "即将有冰雹"
+        "雷" in condition -> "即将有雷雨"
+        else -> "即将降雨"
+    }
+
+    private fun precipitationBody(time: String, condition: String): String {
+        val advice = when {
+            "雪" in condition -> "路面可能湿滑，注意保暖与出行安全。"
+            "雹" in condition || "雷" in condition -> "尽量留在室内，注意安全。"
+            else -> "外出请带伞。"
+        }
+        return "预计 $time 前后$condition，$advice"
     }
 
     /** 通知推送测试（仅 dev 构建入口可见）。 */
@@ -178,6 +240,10 @@ class WeatherNotificationJobService : JobService() {
                 val refresh = store.loadWeatherRefreshSettings()
                 val age = System.currentTimeMillis() - store.loadLastWeatherUpdateMillis()
                 if (refresh.freshnessGuardEnabled && age in 0 until refresh.freshnessMinutes * 60_000L) {
+                    // 数据还新鲜就不重复请求，但通知判定要用缓存再跑一遍：
+                    // 否则周期 Job 每次都落在这个窗口里，等于整天不推任何通知
+                    WeatherCacheStore(applicationContext).load(store.loadWeatherConfig())
+                        ?.let { WeatherNotificationPublisher.publish(applicationContext, it) }
                     return@runCatching
                 }
                 val dashboard = WeatherRepository().fetch(store.loadWeatherConfig())
