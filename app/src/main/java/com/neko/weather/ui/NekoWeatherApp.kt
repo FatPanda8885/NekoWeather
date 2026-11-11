@@ -2831,7 +2831,8 @@ private fun AboutPage(state: MainUiState, viewModel: MainViewModel, modifier: Mo
                     Text("来源：${info.source}", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Spacer(Modifier.height(8.dp))
                     Column(Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState())) {
-                        Text(info.changelog)
+                        // Release 说明是 Markdown，按浅色主题正经渲染，别把 # / ** 原样丢给用户
+                        MarkdownText(info.changelog, themeColors = true)
                     }
                     if (state.updateDownloading) {
                         Spacer(Modifier.height(14.dp))

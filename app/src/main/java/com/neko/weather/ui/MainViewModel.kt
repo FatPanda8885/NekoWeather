@@ -27,6 +27,7 @@ import com.neko.weather.model.NotificationSettings
 import com.neko.weather.model.UpdateInfo
 import com.neko.weather.data.UpdateRepository
 import com.neko.weather.data.ApkUpdater
+import com.neko.weather.data.AppForeground
 import com.neko.weather.data.CustomizationManager
 import com.neko.weather.model.CustomizationSettings
 import com.neko.weather.model.Live2dPlacement
@@ -566,6 +567,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val state = _state.value
         if (state.updateDownloading) return
         val info = state.updateInfo ?: return
+        val app = getApplication<Application>()
+        val fileName = ApkUpdater.apkFileName(info.version)
+
+        // 已下载且校验通过的包直接复用：用户从「安装未知应用」授权页回来时不该整包重下
+        ApkUpdater.findVerified(app, fileName)?.let { cached ->
+            if (ApkUpdater.install(app, cached)) return
+            _state.update { it.copy(message = "请允许 NekoWeather 安装未知应用，然后重新点击立即更新") }
+            return
+        }
+
         val url = info.downloadUrl
         if (url.isNullOrBlank()) {
             _state.update { it.copy(message = "该版本未提供 APK 下载地址") }
@@ -573,11 +584,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
         viewModelScope.launch {
             _state.update { it.copy(updateDownloading = true, updateProgress = null) }
-            val app = getApplication<Application>()
-            val safeVersion = info.version.replace(Regex("[^0-9A-Za-z._-]"), "")
             runCatching {
                 withContext(Dispatchers.IO) {
-                    ApkUpdater.download(app, url, "NekoWeather-$safeVersion.apk") { progress ->
+                    ApkUpdater.download(app, url, fileName) { progress ->
                         _state.update { it.copy(updateProgress = progress) }
                     }
                 }
@@ -591,6 +600,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             _state.update { it.copy(message = error.message ?: "更新文件校验失败") }
                         }
                         .onSuccess {
+                            // Android 10+ 禁止后台 startActivity 拉起安装器：下载完成时若已切到后台，
+                            // 先把包留在缓存里，回到前台再点一次「立即更新」会命中上面的复用分支。
+                            if (!AppForeground.isForeground) {
+                                _state.update { it.copy(message = "更新已下载，回到应用后点击立即更新即可安装") }
+                                return@onSuccess
+                            }
                             val launched = runCatching { ApkUpdater.install(app, file) }.getOrDefault(false)
                             if (!launched) {
                                 _state.update { it.copy(message = "请允许 NekoWeather 安装未知应用，然后重新点击立即更新") }
@@ -602,7 +617,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         it.copy(
                             updateDownloading = false,
                             updateProgress = null,
-                            message = error.message ?: "下载更新失败",
+                            message = error.message ?: "下载更新失败，请重试",
                         )
                     }
                 }
