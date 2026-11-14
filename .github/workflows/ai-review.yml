@@ -877,21 +877,22 @@ jobs:
               adb shell "run-as com.neko.weather sh -c 'mkdir -p shared_prefs && cat > shared_prefs/neko_weather.xml'" <<'XML'
               <?xml version='1.0' encoding='utf-8' standalone='yes' ?><map><boolean name="onboardingCompleted" value="true" /></map>
               XML
-          - gh 的配置不在默认位置（不是你的 HOME），而且 bash 工具的每次调用不保证继承你 export 的变量，
-            所以**每条命令都带上前缀**，不要依赖 export：
-              GH_CONFIG_DIR=/home/runner/.config/gh gh auth status        # 应显示 NeriBot
-          - 截图与上传（脚本只认 GH_TOKEN，所以同一条命令里取 token）：
+          - gh 的配置文件不可靠，token 放在 /home/runner/.neribot/gh-token（0600，只读）。
+            而且 bash 工具的每次调用不保证继承你 export 的变量，所以**每条命令都用前缀读它**：
+              GH_TOKEN="$(cat /home/runner/.neribot/gh-token)" gh api user --jq .login     # 应输出 NeriBot
+          - 截图与上传（脚本只认 GH_TOKEN）：
               adb exec-out screencap -p > /tmp/xxx.png
-              GH_CONFIG_DIR=/home/runner/.config/gh GH_TOKEN="$(GH_CONFIG_DIR=/home/runner/.config/gh gh auth token)" \
-                /usr/local/bin/neribot-gh-image.sh /tmp/xxx.png
+              GH_TOKEN="$(cat /home/runner/.neribot/gh-token)" /usr/local/bin/neribot-gh-image.sh /tmp/xxx.png
+          - 提交 review 用同样的前缀：
+              GH_TOKEN="$(cat /home/runner/.neribot/gh-token)" gh api -X POST /repos/@@REPO@@/pulls/@@PR_NUMBER@@/reviews --input qa/review-payload.json
               adb exec-out screencap -p > /tmp/xxx.png
               /usr/local/bin/neribot-gh-image.sh /tmp/xxx.png
             成功时 stdout 是一行 markdown：![xxx](https://raw.githubusercontent.com/...)，图片托管在 public 仓库，匿名可访问。
             放进表格单元格时改写成 <img width="170" alt="简述" src="URL" />（宽屏图用 300）。
             上传失败就不要贴坏链接，那一行改用文字说明；不要自己拼 URL。
-          - 提交 review 与上传截图之前先 gh auth status 确认身份是 NeriBot。如果身份不对，不要从 .git/config
-            里取 token（那是 Actions 的 GITHUB_TOKEN，只能以 github-actions[bot] 身份发言，而且对图床没有写权限），
-            直接把身份异常写进报告的【未测试与环境】。
+          - 提交前先跑 GH_TOKEN="$(cat /home/runner/.neribot/gh-token)" gh api user --jq .login，输出 NeriBot 才继续。
+            绝对不要从 .git/config 里取 token（那是 Actions 的 GITHUB_TOKEN，只能以 github-actions[bot] 发言，
+            且对图床没有写权限）；这条命令失败才写进【未测试与环境】。
           - 本 run 只允许提交一次 review。提交前确认 gh auth status 的身份是 NeriBot、图片链接是 raw 直链；
             如果第一次提交后发现身份不对或图没传上，禁止再发第二条去覆盖（历史上有过同一 run 发两条、
             一条 github-actions[bot] 一条 NeriBot 的事故），把问题写进报告的【未测试与环境】即可。
@@ -1057,16 +1058,23 @@ jobs:
         if: ${{ !cancelled() && env.PROCEED == 'true' }}
         run: |
           set +e
-          # gh resolves its config from GH_CONFIG_DIR / HOME, and the agent's shell has a
-          # trimmed environment, so pin an absolute path here and tell the prompt to use it.
+          # gh auth login does not reliably take effect: its config lookup depends on HOME /
+          # GH_CONFIG_DIR, and the agent's shell reported the config directory as empty. So do
+          # not depend on it at all: also drop the token into a 0600 file that the prompt reads
+          # per command with GH_TOKEN="$(cat ...)". The login is kept as a best effort only.
           export GH_CONFIG_DIR=/home/runner/.config/gh
-          mkdir -p "$GH_CONFIG_DIR"
+          mkdir -p "$GH_CONFIG_DIR" /home/runner/.neribot
           if [ -n "${GH_TOKEN:-}" ]; then
-            printf '%s\n' "$GH_TOKEN" | gh auth login --with-token --hostname github.com >/dev/null 2>&1
-            chmod 600 "$HOME/.config/gh/hosts.yml" 2>/dev/null || true
-            echo "gh auth: $(gh api user --jq .login 2>/dev/null || echo unknown)"
+            printf '%s\n' "$GH_TOKEN" | gh auth login --with-token --hostname github.com 2>&1 | tail -3
+            ( umask 077; printf '%s\n' "$GH_TOKEN" > /home/runner/.neribot/gh-token )
+            # The agent may run as a different user than this step, so hand the file over.
+            chown -R runner:runner /home/runner/.neribot 2>/dev/null || true
+            chmod 600 /home/runner/.neribot/gh-token "$GH_CONFIG_DIR/hosts.yml" 2>/dev/null || true
+            echo "gh identity: $(gh api user --jq .login 2>/dev/null || echo unknown)"
+            echo "token file: $(stat -c '%s bytes mode %a' /home/runner/.neribot/gh-token 2>/dev/null || echo missing)"
+            echo "hosts.yml: $( [ -f "$GH_CONFIG_DIR/hosts.yml" ] && stat -c '%s bytes' "$GH_CONFIG_DIR/hosts.yml" || echo missing )"
           else
-            echo "::warning::GH_TOKEN is empty; the agent will post with the wrong identity"
+            echo "::warning::GH_TOKEN is empty; the agent cannot post anything"
           fi
 
       - name: Run agent (deepseek-flash, effort high, 1M)
