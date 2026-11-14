@@ -888,6 +888,14 @@ jobs:
              - 每条场景跑完抓一次 logcat；崩溃必须截图。
           4. 写报告并提交（格式见下）。
 
+          == 时间预算与止损（硬性）==
+          - 全流程上限 45 分钟（读 PR、装包、跑场景、截图上传、写报告都算）。到点立即停手，用已有证据写报告，
+            没覆盖到的写 ⏭️ not tested，不要为了凑满表格继续加班。
+          - 单条命令不得超过 5 分钟；耗时更长的（gradle、模拟器启动、图片上传）放后台跑再轮询，不要让一条命令堵住流程。
+          - 需要改系统信任链才能验证的项（注入 CA / nsenter 进 App 挂载命名空间 / 自建 MitM），最多花 10 分钟；
+            拿不到就判 ⏭️ not tested 并写明原因，不要反复重试。
+          - 同一张截图上传失败最多重试 2 次；仍失败就用文字结论代替，不要在图片链路上反复重试。
+
           == 报告格式（结构必须照抄）==
           # QA 验证报告：<一句话点明这次验的是什么>
 
@@ -971,12 +979,32 @@ jobs:
           PY
 
 
-      - name: Run agent (DeepSeek Harness / deepseek-flash, effort max, 1M)
-        # agent 失败要如实失败；Ensure review posted 仍然会跑并说明情况
+      - name: Shell timeout patch
+        # The image caps one shell command at 90 minutes; 20 is enough for any legit
+        # command (gradle ~2 min, emulator boot <= 10 min) and still bounds a stuck one.
         if: ${{ !cancelled() && env.PROCEED == 'true' }}
+        run: |
+          set +e
+          cat > /tmp/neribot-shell-timeout.yml <<'PATCH'
+          - id: persistent-bash
+            config:
+              timeoutMs: 1200000
+          - id: persistent-pwsh
+            config:
+              timeoutMs: 1200000
+          PATCH
+          echo "shell timeout patch: $(wc -l < /tmp/neribot-shell-timeout.yml) lines"
+
+      - name: Run agent (deepseek-flash, effort high, 1M)
+        # A failed agent must fail the step; Ensure review posted still reports it.
+        if: ${{ !cancelled() && env.PROCEED == 'true' }}
+        # Hard ceiling: a single review must never burn three hours again.
+        timeout-minutes: 70
         env:
           # 会话 id 带 run 标识，便于在 dsh home 的 sessions/ 目录里对应排查
           NERIBOT_SESSION_ID: qa-run-${{ github.run_id }}-${{ github.run_attempt }}
+          NERIBOT_EFFORT: high
+          NERIBOT_DSH_PATCH: /tmp/neribot-shell-timeout.yml
           DSH_CONTEXT_WINDOW: '1000000'
           RUN_ID: ${{ github.run_id }}
           ATTEMPT: ${{ github.run_attempt }}
@@ -985,14 +1013,15 @@ jobs:
           NERIBOT_AVD_LIST: 'neribot-api30,neribot-api35'
           NERIBOT_API_LIST: '30,35'
         run: |
-          set +e  # runner 用 bash -e 跑步骤，这里显式关掉：成败由每步自己判定并 exit
+          set +e  # the runner executes steps with bash -e; each step decides its own exit code
           set -uo pipefail
           set +e
-          python3 /usr/local/bin/neribot_agent.py qa-prompt.txt > qa-agent.log 2>&1
+          # 3600s hard cap on the whole agent session; the step timeout is the outer net.
+          timeout -k 30 3600 python3 /usr/local/bin/neribot_agent.py qa-prompt.txt > qa-agent.log 2>&1
           CODE=$?
           set -e
           tail -n 40 qa-agent.log || true
-          echo "agent exit=$CODE（完整输出留在 runner 工作目录 qa-agent.log，会话日志在 ~/.dsh/sessions/）"
+          echo "agent exit=$CODE (full output: qa-agent.log, session log: ~/.dsh/sessions/)"
           exit $CODE
 
 
