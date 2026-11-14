@@ -112,6 +112,7 @@ dependencies {
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20250107")
+    testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
 
     // 像素基线回归：JVM + Robolectric 渲染 Compose，靠 Roborazzi 存取 PNG 基线
     // 基线目录 app/src/test/screenshots/，任务 recordRoborazziDebug / verifyRoborazziDebug

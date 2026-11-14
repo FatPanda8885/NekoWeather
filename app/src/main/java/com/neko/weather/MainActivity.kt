@@ -7,6 +7,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.neko.weather.data.AppForeground
 import com.neko.weather.ui.MainViewModel
 import com.neko.weather.ui.MainViewModelFactory
 import com.neko.weather.ui.NekoWeatherApp
@@ -23,6 +24,16 @@ class MainActivity : ComponentActivity() {
         }
         // 通知任务注册失败不能阻止主界面启动。
         WeatherNotificationScheduler.sync(applicationContext)
+    }
+
+    override fun onStart() {
+        super.onStart()
+        AppForeground.onActivityStarted()
+    }
+
+    override fun onStop() {
+        AppForeground.onActivityStopped()
+        super.onStop()
     }
 
     override fun onResume() {
