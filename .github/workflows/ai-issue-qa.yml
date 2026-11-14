@@ -154,6 +154,7 @@ jobs:
             echo "b. 复现优先——禁止只读代码就下结论。必须写出最小复现并真正跑起来，按问题类型选手段:"
             echo "   - 优先 JVM 单测: 在 app/src/test 下临时新增测试类，跑 ./gradlew :app:testDebugUnitTest --tests '<新增测试类的全限定名>'。数据层/逻辑层问题照现有 JUnit4 风格写（参考 app/src/test/java/com/neko/weather/data/AlertRepositoryTest.kt）。"
             echo "   - 只有 UI/交互类问题才用模拟器: /usr/local/bin/neribot-emulator.sh start 35（幂等，成功会打印 EMULATOR_SERIAL=emulator-5554；35 起不来就试 30），然后 ./gradlew :app:assembleDebug，adb install -r app/build/outputs/apk/debug/*x86_64*.apk，逐屏操作并 adb exec-out screencap -p > \$NERIBOT_UI_OUT_DIR/screen-NN.png，同时 adb logcat -d 收 FATAL EXCEPTION / ANR / 崩溃栈。收工必须 /usr/local/bin/neribot-emulator.sh stop。"
+            echo "   - 上传前先把 token 导进环境（脚本只认 GH_TOKEN）: export GH_TOKEN=\"\$(gh auth token 2>/dev/null)\""
             echo "   - 截图贴进报告: /usr/local/bin/neribot-gh-image.sh \$NERIBOT_UI_OUT_DIR/*.png；图片托管在 public 仓库 NeriBot/ImageGallery，路径 <仓库名>/issue/<issue 编号>/，stdout 每行一个 ![](url)，原样粘贴使用脚本输出的 markdown，不要自己拼 URL。"
             echo "c. 临时文件一律放 /tmp。禁止修改仓库源码、禁止 commit、禁止 push、禁止开分支。临时测试类允许写在 app/src/test 下，但必须在报告里明确写\"仅为复现，未提交\"，并在结束前删除（删除后 git status 应只剩非源码的临时产物）。"
             echo "d. 每条结论必须带证据: 命令 + 关键输出（≤10 行）、测试断言失败信息，或截图 markdown。引用仓库或依赖源码时给 GitHub permalink（含 commit sha 与 #L 行号），不要只说\"某处代码\"。"

@@ -873,7 +873,8 @@ jobs:
               adb shell "run-as com.neko.weather sh -c 'mkdir -p shared_prefs && cat > shared_prefs/neko_weather.xml'" <<'XML'
               <?xml version='1.0' encoding='utf-8' standalone='yes' ?><map><boolean name="onboardingCompleted" value="true" /></map>
               XML
-          - 截图与上传：
+          - 截图与上传（先用 gh 把 token 导进环境，脚本只认 GH_TOKEN）：
+              export GH_TOKEN="$(gh auth token 2>/dev/null)"
               adb exec-out screencap -p > /tmp/xxx.png
               /usr/local/bin/neribot-gh-image.sh /tmp/xxx.png
             成功时 stdout 是一行 markdown：![xxx](https://raw.githubusercontent.com/...)，图片托管在 public 仓库，匿名可访问。
