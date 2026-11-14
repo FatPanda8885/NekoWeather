@@ -1,76 +1,84 @@
-# NeriBot —— NekoWeather 的 AI QA review bot
-#   = 模拟器真机走查（android-30 / android-35）+ 截图证据 + 像素基线回归（Roborazzi）+ 可选 inline 评论
+# NeriBot -- AI QA review bot for NekoWeather
+#   = emulator walkthrough (android-30 / android-35) + screenshot evidence + pixel baseline regression (Roborazzi) + optional inline comments
 #
-# 运行环境: 自托管 runner（标签 neribot），来自独立仓库 FatPanda8885/NeriBot 的容器镜像
-#           ghcr.io/fatpanda8885/neribot-runner，16 vCPU / 16 GB RAM / 8 TB 磁盘，
-#           内含 JDK17 / Android SDK（emulator、platform-tools、system-images android-30/35 x86_64）
-#           / gh / jq / python3 / DeepSeek Harness Python SDK（/usr/local/bin/neribot_agent.py）
-# Agent:    DeepSeek Harness Python SDK（无头驱动），model=deepseek-flash (V4.1-Flash)，
-#           reasoning_effort=max，上下文窗口 1M，shell 超时 60min
-# 密钥:     不使用任何 GitHub secret。GH_TOKEN（bot 账号 PAT）与 DEEPSEEK_API_KEY
-#           （DeepSeek key）由 runner 容器注入并继承到各步骤，唯一存放处是服务器上的 docker/.env
-#           ——注意本 workflow 不得在 env 里引用它们，空的 secret 会覆盖容器注入的值。
-# 部署与运维文档: https://github.com/FatPanda8885/NeriBot
+# Runtime: self-hosted runner (label neribot) from the standalone FatPanda8885/NeriBot image
+#          ghcr.io/fatpanda8885/neribot-runner, 16 vCPU / 16 GB RAM / 8 TB disk, bundling
+#          JDK17 / Android SDK (emulator, platform-tools, system-images android-30/35 x86_64)
+#          / gh / jq / python3 / DeepSeek Harness Python SDK (/usr/local/bin/neribot_agent.py)
+# Agent:   DeepSeek Harness Python SDK (headless), model=deepseek-flash (V4.1-Flash),
+#          reasoning_effort=max, 1M context window, 60min shell timeout
+# Secrets: no GitHub secret is used. GH_TOKEN (bot account PAT) and DEEPSEEK_API_KEY
+#          (DeepSeek key) are injected by the runner container and inherited by every step; the
+#          only place they are stored is docker/.env on the server -- this workflow must never
+#          reference them in env, an empty secret would override the container-injected value.
+# Deployment and operations docs: https://github.com/FatPanda8885/NeriBot
 #
-# 【镜像 ↔ workflow 契约】镜像（生产方）提供下列能力，workflow（消费方）只按此调用，
-# 不自行拼 emulator 命令、不自己创建 AVD、不自己起 adb server：
-#   1. 环境变量：ANDROID_HOME=/opt/android-sdk，ANDROID_AVD_HOME=/home/runner/android-avd
-#      （持久卷 runner-home 内）
-#   2. 已装 SDK 组件：emulator、platform-tools(adb)、
-#      system-images;android-30;google_apis;x86_64、system-images;android-35;google_apis;x86_64
-#   3. /usr/local/bin/neribot-emulator.sh <start|status|stop> [api]，api ∈ {30,35}
-#      - start：幂等；创建/复用 AVD（命名 neribot-api<api>）；后台无窗口启动
-#        （-no-window -no-audio -no-boot-anim -gpu swiftshader_indirect -no-snapshot）；
-#        等到 sys.boot_completed=1；成功时在 stdout 打印一行 EMULATOR_SERIAL=emulator-5554
-#      - 失败必须打印可诊断原因（/dev/kvm 不可用、镜像缺失等）并以非 0 退出
-#      - stop：杀掉该 AVD 的 emulator 进程并 adb kill-server，幂等
-#   4. /usr/local/bin/neribot-gh-image.sh <文件> [文件...]
-#      - 把 PNG 上传到 public 仓库 NERIBOT_IMAGE_REPO 的 NERIBOT_IMAGE_BRANCH，
-#        路径 <SOURCE_REPO>/<KIND>/<NUMBER>/<文件名>（GitHub Contents API，内容 base64）
-#      - 主图床失败时兜底为 release 资产（NERIBOT_IMAGE_FALLBACK_REPO + NERIBOT_IMAGE_TAG）
-#      - 读 env：GH_TOKEN、NERIBOT_IMAGE_REPO / BRANCH / SOURCE_REPO / KIND / NUMBER、
-#        NERIBOT_IMAGE_FALLBACK_REPO、NERIBOT_IMAGE_TAG
-#      - 资产名带 github.run_id/attempt 前缀避免冲突
-#      - stdout 每行一个可直接粘进 review 正文的 markdown：![](<public url>)
-#   5. 容器需 /dev/kvm（compose devices 映射）且 /dev/shm ≥ 2G
-#   6. 截图目录由 workflow 通过 env NERIBOT_UI_OUT_DIR 指定
+# [image <-> workflow contract] The image (producer) provides the capabilities below and the
+# workflow (consumer) only calls them: it never assembles emulator commands, creates an AVD or
+# starts an adb server itself:
+#   1. Env: ANDROID_HOME=/opt/android-sdk, ANDROID_AVD_HOME=/home/runner/android-avd
+#      (inside the persistent runner-home volume)
+#   2. Installed SDK components: emulator, platform-tools (adb),
+#      system-images;android-30;google_apis;x86_64, system-images;android-35;google_apis;x86_64
+#   3. /usr/local/bin/neribot-emulator.sh <start|status|stop> [api], api in {30,35}
+#      - start: idempotent; creates or reuses the AVD (named neribot-api<api>); starts headless in
+#        the background (-no-window -no-audio -no-boot-anim -gpu swiftshader_indirect -no-snapshot);
+#        waits for sys.boot_completed=1; on success prints one stdout line EMULATOR_SERIAL=emulator-5554
+#      - on failure it must print a diagnosable reason (no /dev/kvm, missing image, ...) and exit non-zero
+#      - stop: kills that AVD emulator process and runs adb kill-server; idempotent
+#   4. /usr/local/bin/neribot-gh-image.sh <file> [file...]
+#      - uploads PNGs to the public repo NERIBOT_IMAGE_REPO on branch NERIBOT_IMAGE_BRANCH at
+#        <SOURCE_REPO>/<KIND>/<NUMBER>/<file> (GitHub Contents API, base64 content)
+#      - falls back to release assets (NERIBOT_IMAGE_FALLBACK_REPO + NERIBOT_IMAGE_TAG) when the
+#        primary host fails
+#      - reads env: GH_TOKEN, NERIBOT_IMAGE_REPO / BRANCH / SOURCE_REPO / KIND / NUMBER,
+#        NERIBOT_IMAGE_FALLBACK_REPO, NERIBOT_IMAGE_TAG
+#      - asset names carry a github.run_id/attempt prefix to avoid collisions
+#      - stdout is one line of markdown per file, ready to paste into the review body: ![](<public url>)
+#   5. The container needs /dev/kvm (compose devices mapping) and /dev/shm >= 2G
+#   6. The screenshot directory is chosen by the workflow through env NERIBOT_UI_OUT_DIR
 #
-# 触发（一律按需，默认不跑）:
-#   1. 在 PR 的 Reviewers 里请求 NeriBot            -> 完整 QA review（pull_request_target/review_requested）
-#   2. 在 PR 下评论 /qa 或 @NeriBot（大小写三种写法）-> 同上（issue_comment，仅 owner/OWNER/MEMBER 生效）
-#   3. /qa inline（或 /qa inline-review）-> 同上，并要求对 P0/P1 逐行 inline 评论；
-#      等价写法：在 PR 正文或任意评论里 @NeriBot 且同段出现「逐行/inline/行内/line-by-line/行内评论」
-#   本 workflow **不订阅 pull_request**：普通开 PR 与后续 push 不会在 PR 上产生任何 check。
-# 安全: 不自动触发，防止在自托管 runner 上执行不可信代码；一次运行只对 head SHA 提交一条 review，
-#       同一 head SHA 已经有 NeriBot 的 review 时直接跳过（PROCEED=false）。
+# Triggers (on demand only, nothing runs by default):
+#   1. Request NeriBot in the PR Reviewers            -> full QA review (pull_request_target/review_requested)
+#   2. Comment /qa or @NeriBot on the PR (three casings) -> same (issue_comment, owner/OWNER/MEMBER only)
+#   3. /qa inline (or /qa inline-review) -> same, and asks for a line-by-line inline comment per P0/P1
+#      Equivalent: @NeriBot in the PR body or in any comment with a line-by-line / inline keyword
+#      in the same paragraph
+#   This workflow **does not subscribe to pull_request**: opening a PR or pushing to it creates no check.
+# Security: never triggered automatically, so untrusted code cannot run on the self-hosted runner;
+#           one run posts at most one review for the head SHA, and a head SHA NeriBot already
+#           reviewed is skipped (PROCEED=false).
 
 name: NeriBot QA Review
 
 on:
-  # (a) PR 评论里 /qa 或 @NeriBot（大小写三种写法由 job if 判定）
+  # (a) /qa or @NeriBot in a PR comment (the three casings are decided by the job if)
   issue_comment:
     types: [created]
 
-  # (b) GitHub 原生「Request review」：在 PR 的 Reviewers 里请求 NeriBot。
-  # 为什么用 pull_request_target 而不是 pull_request:
-  #   pull_request 事件取的是 PR 合并引用（merge ref）里的 workflow 文件，fork 的提交者可以改
-  #   .github/workflows/*.yml 并让它在自托管 runner 上执行；而本 runner 的 GH_TOKEN /
-  #   DEEPSEEK_API_KEY 是容器环境变量、会被 job 继承——那样等于让 fork 作者改 workflow 读你的密钥。
-  #   pull_request_target 取的是 base 分支里的 workflow 定义，配合 qa job 的显式授权判断才安全。
+  # (b) GitHub native "Request review": request NeriBot in the PR Reviewers.
+  # Why pull_request_target instead of pull_request:
+  #   pull_request takes the workflow file from the PR merge ref, so a fork committer can edit
+  #   .github/workflows/*.yml and have it run on the self-hosted runner; this runner's GH_TOKEN /
+  #   DEEPSEEK_API_KEY are container env vars inherited by the job -- that equals letting the fork
+  #   author rewrite the workflow and read your secrets.
+  #   pull_request_target takes the workflow definition from the base branch, which is only safe
+  #   together with the explicit authorization check in the qa job.
   #
-  # 刻意 **不** 写 pull_request: —— 服务器常开之前，任何自动触发都只会在 PR 上挂一个 Queued 黄点。
+  # Deliberately **not** subscribing to pull_request: before the server runs permanently, any
+  # automatic trigger would just park a Queued dot on the PR.
   pull_request_target:
     types: [review_requested]
 
-  # (c) 手动触发（维护者自测 / 补跑）：不碰 PR 时间线，也不会产生任何评论。
-  # 用法：Actions -> NeriBot QA Review -> Run workflow，填 pr 编号；inline 填 true 要求行内评论。
+  # (c) Manual trigger (maintainer smoke test / re-run): leaves the PR timeline alone and posts no comment.
+  # Usage: Actions -> NeriBot QA Review -> Run workflow, fill in the PR number; inline true asks for inline comments.
   workflow_dispatch:
     inputs:
       pr:
-        description: 'PR 编号'
+        description: 'PR number'
         required: true
       inline:
-        description: '要求 P0/P1 逐行 inline 评论（true / false）'
+        description: 'Request a line-by-line inline review for P0/P1 (true / false)'
         required: false
         default: 'false'
 
@@ -79,28 +87,32 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  # bot 账号登录名（preflight 会校验 GH_TOKEN 的身份与此一致）
+  # bot account login (preflight verifies that GH_TOKEN belongs to this account)
   BOT_LOGIN: NeriBot
 
 jobs:
   qa:
-    # 唯一的 QA job：两种「按需」触发共用同一套步骤。
-    #   a) pull_request_target + review_requested —— 在 PR 的 Reviewers 里请求 NeriBot
-    #   b) issue_comment —— 在 PR 下评论 /qa 或 @NeriBot
+    # The only QA job: both on-demand triggers share the same set of steps.
+    #   a) pull_request_target + review_requested -- request NeriBot in the PR Reviewers
+    #   b) issue_comment -- comment /qa or @NeriBot on the PR
     #
-    # 为什么用 pull_request_target 而不是 pull_request:
-    #   pull_request 事件取的是 PR 合并引用（merge ref）里的 workflow 文件，fork 的提交者可以改
-    #   .github/workflows/*.yml 并让它在自托管 runner 上执行；而本 runner 的 GH_TOKEN /
-    #   DEEPSEEK_API_KEY 是容器环境变量、会被 job 继承——用 pull_request 等于让 fork 作者改
-    #   workflow 读你的密钥。pull_request_target 取的是 base 分支里的 workflow 定义，配合第一个
-    #   步骤的显式授权判断才安全；代码仍然显式 checkout 到 PR head SHA 上再构建与走查。
+    # Why pull_request_target instead of pull_request:
+    #   pull_request takes the workflow file from the PR merge ref, so a fork committer can edit
+    #   .github/workflows/*.yml and have it run on the self-hosted runner; this runner's GH_TOKEN /
+    #   DEEPSEEK_API_KEY are container env vars inherited by the job -- pull_request would let the fork
+    #   author rewrite the workflow and read your secrets. pull_request_target takes the workflow
+    #   definition from the base branch, which is only safe together with the explicit authorization
+    #   check in the first step; the code is still explicitly checked out at the PR head SHA before
+    #   build and walkthrough.
     #
-    # 限制：只处理个人 review 请求（requested_reviewer == NeriBot）。团队 review 请求走
-    #       requested_team，直接跳过；需要时改用评论 @NeriBot / /qa。
+    # Limitation: only personal review requests are handled (requested_reviewer == NeriBot). Team
+    #             review requests arrive as requested_team and are skipped; use a comment with
+    #             @NeriBot / /qa instead.
     #
-    # 下面的 if 只判断「事件形态」（便宜、无 API 调用，决定要不要为这个事件排 job）；
-    # 「谁有权触发」在 Authorize & dedupe 步骤里判定，未授权即 PROCEED=false 跳过（不算失败），
-    # 后续每个步骤都以 env.PROCEED == 'true' 为前提。
+    # The if below only classifies the event shape (cheap, no API call: it decides whether a job is
+    # queued for this event); "who may trigger it" is decided in the Authorize and dedupe step, and an
+    # unauthorized request gets PROCEED=false and is skipped (not a failure). Every later step assumes
+    # env.PROCEED == 'true'.
     if: >-
       (github.event_name == 'pull_request_target' &&
        github.event.action == 'review_requested' &&
@@ -122,26 +134,26 @@ jobs:
     env:
       REPO: ${{ github.repository }}
       PR_NUMBER: ${{ github.event.inputs.pr || github.event.pull_request.number || github.event.issue.number }}
-      # REQUEST_TEXT 由 Authorize & dedupe 步骤写入（评论触发取评论正文；review_requested 取 PR 描述末尾 2000 字符）
+      # REQUEST_TEXT is written by the Authorize and dedupe step (the comment body for comment triggers; the last 2000 chars of the PR body for review_requested)
       ANDROID_HOME: /opt/android-sdk
       ANDROID_AVD_HOME: /home/runner/android-avd
-      # 截图目录（镜像契约第 6 条：由 workflow 指定）
+      # screenshot directory (image contract item 6: chosen by the workflow)
       NERIBOT_UI_OUT_DIR: ${{ github.workspace }}/qa/ui-shots
-      # 截图图床（镜像契约：neribot-gh-image.sh 走 GitHub Contents API 上传到 public 仓库）
-      # 目录：<source_repo>/<issue|pr>/<编号>/<文件名>，raw 直链可匿名访问
+      # screenshot host (image contract: neribot-gh-image.sh uploads through the GitHub Contents API to a public repo)
+      # layout: <source_repo>/<issue|pr>/<number>/<file>, the raw link is anonymously readable
       NERIBOT_IMAGE_REPO: NeriBot/ImageGallery
       NERIBOT_IMAGE_BRANCH: main
       NERIBOT_IMAGE_SOURCE_REPO: ${{ github.repository }}
       NERIBOT_IMAGE_KIND: pr
       NERIBOT_IMAGE_NUMBER: ${{ github.event.inputs.pr || github.event.pull_request.number || github.event.issue.number }}
-      # 兜底：主图床不可用时退回 release 资产
+      # fallback: use release assets when the primary image host is unavailable
       NERIBOT_IMAGE_FALLBACK_REPO: FatPanda8885/NeriBot
       NERIBOT_IMAGE_TAG: qa-assets
-      # agent 必须把这行标记原样贴进报告末尾，最后一步据此确认 review 确实提交了
+      # the agent must paste this marker verbatim at the end of the report, the last step uses it to confirm the review was really posted
       QA_MARKER: '<!-- neribot:qa-report run=${{ github.run_id }}.${{ github.run_attempt }} -->'
     steps:
-      - name: Authorize & dedupe（来源判定 + 请求人权限 + 该 head SHA 是否已 review 过）
-        # 外部输入（评论正文、登录名）一律经 env 传入，绝不拼进脚本，避免注入
+      - name: Authorize and dedupe
+        # External input (comment body, logins) always arrives through env, never spliced into the script: injection guard
         env:
           EVENT_NAME: ${{ github.event_name }}
           SENDER_LOGIN: ${{ github.event.sender.login }}
@@ -149,7 +161,7 @@ jobs:
           COMMENT_BODY: ${{ github.event.comment.body }}
           HEAD_SHA_EVENT: ${{ github.event.pull_request.head.sha }}
         run: |
-          set +e  # runner 用 bash -e 跑步骤，这里显式关掉：成败由每步自己判定并 exit
+          set +e  # the runner executes steps with bash -e; turn it off so every check decides its own exit code
           set -uo pipefail
           HEAD_SHA="${HEAD_SHA_EVENT:-}"
           if [ -z "$HEAD_SHA" ]; then
@@ -158,41 +170,40 @@ jobs:
           echo "HEAD_SHA=$HEAD_SHA" >> "$GITHUB_ENV"
 
           PROCEED=true
-          # 授权：仓库 owner / 评论者 author_association ∈ {OWNER,MEMBER} / 仓库 admin|write|maintain 协作者
+          # Authorization: repo owner / commenter author_association in {OWNER,MEMBER} / collaborator with admin|write|maintain
           if [ "$SENDER_LOGIN" = "${{ github.repository_owner }}" ]; then
-            echo "来源 $EVENT_NAME：$SENDER_LOGIN 是仓库 owner，允许"
+            echo "source $EVENT_NAME: $SENDER_LOGIN is the repo owner, allowed"
           elif [ "${COMMENT_ASSOC:-}" = "OWNER" ] || [ "${COMMENT_ASSOC:-}" = "MEMBER" ]; then
-            echo "来源 $EVENT_NAME：评论者 $SENDER_LOGIN 的 author_association=${COMMENT_ASSOC}，允许"
+            echo "source $EVENT_NAME: commenter $SENDER_LOGIN has author_association=${COMMENT_ASSOC}, allowed"
           else
             PERM=$(gh api "repos/$REPO/collaborators/$SENDER_LOGIN/permission" --jq .permission 2>/dev/null || echo none)
             case "$PERM" in
-              admin|write|maintain) echo "来源 $EVENT_NAME：$SENDER_LOGIN 的仓库权限是 $PERM，允许" ;;
-              *) echo "::warning::来源 $EVENT_NAME：$SENDER_LOGIN 不是可信请求者（权限 $PERM），跳过本次 review"; PROCEED=false ;;
+              admin|write|maintain) echo "source $EVENT_NAME: $SENDER_LOGIN has repo permission $PERM, allowed" ;;
+              *) echo "::warning::source $EVENT_NAME: $SENDER_LOGIN is not a trusted requester (permission $PERM), skipping this review"; PROCEED=false ;;
             esac
           fi
 
-          # 去重：同一 head SHA 已经有 NeriBot 的 review 就不再重复跑。
-          # 只对自动触发（review_requested）生效：评论里的 /qa、@NeriBot 是人手明确要求的，必须照做，
-          # 否则同一个 head 上想重跑一次就再也跑不起来了。
+          # Dedupe: skip when NeriBot already reviewed this head SHA.
+          # Only for automatic triggers (review_requested): /qa and @NeriBot in a comment are an explicit
+          # human request and must be honored, otherwise a given head could never be re-reviewed.
           if [ "$PROCEED" = "true" ] && [ -n "$HEAD_SHA" ] && [ "$EVENT_NAME" = "pull_request_target" ]; then
-            # gh --paginate 每页输出一个数组，jq -s 得到「数组的数组」，所以要先 flatten。
-            # 去重只是优化：查询失败时宁可按「未 review」继续跑，也不要打断整条流水线。
+            # gh --paginate prints one array per page, so jq -s yields an array of arrays: flatten first.
+            # Dedupe is only an optimization: when the query fails, continue as "not reviewed yet" instead of breaking the run.
             DONE=$(gh api --paginate "repos/$REPO/pulls/$PR_NUMBER/reviews?per_page=100" 2>/dev/null \
               | jq -s --arg bot "$BOT_LOGIN" --arg sha "$HEAD_SHA" \
                   'flatten | any((.user.login // "") == $bot and (.commit_id // "") == $sha)' \
                   2>/dev/null) || DONE=""
             if [ -z "$DONE" ]; then
-              echo "::warning::去重查询失败（gh/jq 异常），按未 review 处理，继续运行"
+              echo "::warning::dedupe query failed (gh/jq error), treating it as not reviewed and continuing"
               DONE=false
             fi
             if [ "$DONE" = "true" ]; then
-              echo "head $HEAD_SHA 已经有 NeriBot 的 review，跳过重复运行"
-              echo "### 跳过：head $HEAD_SHA 已有 NeriBot review" >> "$GITHUB_STEP_SUMMARY"
+              echo "head $HEAD_SHA already has a NeriBot review, skipping the duplicate run"
+              echo "### skipped: head $HEAD_SHA already has a NeriBot review" >> "$GITHUB_STEP_SUMMARY"
               PROCEED=false
             fi
           fi
 
-          # 请求文本：评论触发取评论正文；review_requested 取 PR 描述末尾 2000 字符
           if [ "${EVENT_NAME:-}" = "issue_comment" ]; then
             REQ="${COMMENT_BODY:-}"
           else
@@ -211,70 +222,68 @@ jobs:
       - name: Preflight
         if: env.PROCEED == 'true'
         run: |
-          set +e  # runner 用 bash -e 跑步骤，这里显式关掉：成败由每步自己判定并 exit
+          set +e  # the runner executes steps with bash -e; turn it off so every check decides its own exit code
           set -uo pipefail
           fail=0
           err() { echo "::error::$*"; fail=1; }
 
-          # 基础工具
           for c in python3 gh jq adb java; do
-            command -v "$c" >/dev/null || err "缺少命令 $c（runner 镜像不完整，请更新 FatPanda8885/NeriBot 镜像）"
+            command -v "$c" >/dev/null || err "missing command $c (incomplete runner image, update the FatPanda8885/NeriBot image)"
           done
           test -x /usr/local/bin/neribot_agent.py \
-            || err "/usr/local/bin/neribot_agent.py 缺失（runner 镜像来自 FatPanda8885/NeriBot，请更新镜像）"
+            || err "/usr/local/bin/neribot_agent.py is missing (runner image comes from FatPanda8885/NeriBot, update the image)"
           test -x /usr/local/bin/neribot-emulator.sh \
-            || err "/usr/local/bin/neribot-emulator.sh 缺失（镜像契约第 3 条：模拟器管理脚本必须由镜像提供）"
+            || err "/usr/local/bin/neribot-emulator.sh is missing (image contract item 3: the image must provide the emulator script)"
           test -x /usr/local/bin/neribot-gh-image.sh \
-            || err "/usr/local/bin/neribot-gh-image.sh 缺失（镜像契约第 4 条：截图上传脚本必须由镜像提供）"
+            || err "/usr/local/bin/neribot-gh-image.sh is missing (image contract item 4: the image must provide the screenshot upload script)"
 
-          # Android SDK 与两档 system-image（镜像契约第 1、2 条）
+          # Android SDK and both system images (image contract items 1 and 2)
           test -d "$ANDROID_HOME/emulator" \
-            || err "缺少 $ANDROID_HOME/emulator"
+            || err "missing $ANDROID_HOME/emulator"
           test -d "$ANDROID_HOME/platform-tools" \
-            || err "缺少 $ANDROID_HOME/platform-tools"
+            || err "missing $ANDROID_HOME/platform-tools"
           for api in 30 35; do
             test -d "$ANDROID_HOME/system-images/android-$api/google_apis/x86_64" \
-              || err "缺少 system-image android-$api;google_apis;x86_64（真机走查需要两档）"
+              || err "missing system-image android-$api;google_apis;x86_64 (the device walkthrough needs both API levels)"
           done
           mkdir -p "$ANDROID_AVD_HOME" 2>/dev/null \
-            || err "无法创建 ANDROID_AVD_HOME=$ANDROID_AVD_HOME（持久卷 runner-home 未挂载？）"
+            || err "cannot create ANDROID_AVD_HOME=$ANDROID_AVD_HOME (is the persistent runner-home volume mounted?)"
 
-          # KVM 与 /dev/shm（镜像契约第 5 条）
+          # KVM and /dev/shm (image contract item 5)
           if [ -w /dev/kvm ] && [ -r /dev/kvm ]; then
             echo "/dev/kvm ok"
           else
-            err "/dev/kvm 不可读写：docker compose 未映射 devices(/dev/kvm) 或宿主未开启嵌套虚拟化"
+            err "/dev/kvm is not readable/writable: docker compose does not map devices(/dev/kvm) or the host has no nested virtualization"
           fi
           shm_mb=$(df -m /dev/shm 2>/dev/null | awk 'NR==2{print $2}')
           if [ "${shm_mb:-0}" -ge 2000 ] 2>/dev/null; then
             echo "/dev/shm ${shm_mb}MB ok"
           else
-            err "/dev/shm 只有 ${shm_mb:-0}MB，需要 ≥2048MB（compose 的 shm_size）"
+            err "/dev/shm is only ${shm_mb:-0}MB, at least 2048MB is required (compose shm_size)"
           fi
 
-          # 注入的密钥与 bot 身份
           test -n "${GH_TOKEN:-}" \
-            || err "容器环境缺少 GH_TOKEN（服务器 docker/.env 的 NERIBOT_TOKEN 未配置或未重启容器）"
+            || err "container env is missing GH_TOKEN (docker/.env NERIBOT_TOKEN not configured, or the container was not restarted)"
           test -n "${DEEPSEEK_API_KEY:-}" \
-            || err "容器环境缺少 DEEPSEEK_API_KEY（服务器 docker/.env 未配置或未重启容器）"
+            || err "container env is missing DEEPSEEK_API_KEY (docker/.env not configured, or the container was not restarted)"
           test -d /opt/cubism-sdk/CubismSdkForJava-5-r.5 \
-            || err "缺少 /opt/cubism-sdk/CubismSdkForJava-5-r.5（放置方法见 NeriBot 仓库 README）"
+            || err "missing /opt/cubism-sdk/CubismSdkForJava-5-r.5 (see the NeriBot repo README for how to place it)"
           if [ -n "${GH_TOKEN:-}" ]; then
             LOGIN=$(gh api user --jq .login 2>/dev/null || true)
             test "$LOGIN" = "$BOT_LOGIN" \
-              || err "NERIBOT_TOKEN 的身份是 ${LOGIN:-未知}，与 workflow 顶部 env.BOT_LOGIN（$BOT_LOGIN）不一致"
+              || err "NERIBOT_TOKEN belongs to ${LOGIN:-unknown}, which does not match env.BOT_LOGIN ($BOT_LOGIN) at the top of the workflow"
           fi
 
-          # 注意：工作区里的 qa/ 与 NERIBOT_UI_OUT_DIR 必须在 checkout 之后创建，
-          # actions/checkout 默认 git clean -ffdx 会把 checkout 前的未跟踪目录删掉
+          # Note: qa/ and NERIBOT_UI_OUT_DIR in the workspace must be created after checkout,
+          # actions/checkout runs git clean -ffdx by default and deletes untracked directories created before it
           if [ "$fail" -ne 0 ]; then
-            echo "::error::Preflight 未通过，见上面每一条 ::error::"
+            echo "::error::Preflight failed, see each ::error:: above"
             exit 1
           fi
           echo "preflight ok | bot=$BOT_LOGIN | $(java -version 2>&1 | head -1)"
 
 
-      - name: Checkout base（workflow 定义来自 base/默认分支，先取它）
+      - name: Checkout base
         if: env.PROCEED == 'true'
         uses: actions/checkout@v4
 
@@ -291,26 +300,27 @@ jobs:
         if: env.PROCEED == 'true'
         uses: actions/checkout@v4
         with:
-          # fork PR 也能取：公开仓库 + 显式指定 head，不依赖 base 的工作区
+          # Works for fork PRs too: public repo plus an explicit head, no reliance on the base workspace
           repository: ${{ github.event.pull_request.head.repo.full_name }}
           ref: ${{ env.HEAD_SHA }}
 
 
-      - name: Link Cubism SDK（复制到可写位置再软链）
+      - name: Link Cubism SDK
         if: env.PROCEED == 'true'
-        # :cubismFramework 是 include 进来的子项目，Gradle 会往它的 projectDir 里写 build/。
-        # 镜像里的 /opt/cubism-sdk 属于 root 且不可写，直接 ln 过去会让第一个要建目录的 task 失败：
+        # :cubismFramework is an included subproject and Gradle writes build/ into its projectDir.
+        # /opt/cubism-sdk in the image belongs to root and is not writable, so linking straight to it makes
+        # the first task that needs to create a directory fail:
         #   writeDebugAarMetadata: Failed to create parent directory '....cubism-sdk/.../framework/build'
-        # 所以先复制一份到可写位置，再按原来的层级 <root>/.cubism-sdk/<sdk>/... 软链，
-        # 仓库里引用 .cubism-sdk 的相对路径不用改。
-        # 顺序同样重要：checkout 会 git clean -ffdx，清掉未跟踪的 .cubism-sdk。
+        # So copy it to a writable location first and then symlink the original layout
+        # <root>/.cubism-sdk/<sdk>/... ; the relative paths referencing .cubism-sdk in the repo stay valid.
+        # Order matters too: checkout runs git clean -ffdx and removes an untracked .cubism-sdk.
         run: |
           set -euo pipefail
           SRC=/opt/cubism-sdk
           SDK=CubismSdkForJava-5-r.5
           test -d "$SRC/$SDK" \
-            || { echo "::error::镜像缺少 $SRC/$SDK（放置方法见 NeriBot 仓库 README）"; exit 1; }
-          # 单 runner 串行执行，每次重建这一份就够，也不让 /tmp 越积越多
+            || { echo "::error::the image is missing $SRC/$SDK (see the NeriBot repo README for how to place it)"; exit 1; }
+          # The runner is serial and this copy is rebuilt on every run, so /tmp cannot pile up
           DST=/tmp/neribot-cubism
           rm -rf "$DST"
           mkdir -p "$DST"
@@ -318,7 +328,7 @@ jobs:
           rm -f .cubism-sdk
           ln -sfn "$DST" .cubism-sdk
           test -d ".cubism-sdk/$SDK/Framework/framework" \
-            || { echo "::error::.cubism-sdk/$SDK/Framework/framework 不存在，Cubism 目录结构不符"; exit 1; }
+            || { echo "::error::.cubism-sdk/$SDK/Framework/framework does not exist, unexpected Cubism layout"; exit 1; }
           mkdir -p qa "$NERIBOT_UI_OUT_DIR"
           echo "cubism sdk -> $DST ($(du -sh "$DST" | cut -f1))"
           echo "work dir: qa/ + $NERIBOT_UI_OUT_DIR"
@@ -326,13 +336,13 @@ jobs:
 
       - name: Detect inline review request
         if: env.PROCEED == 'true'
-        # 产出 INLINE_REQUESTED=true|false 到 $GITHUB_ENV；命中原因写在 qa/inline-request.txt
+        # Writes INLINE_REQUESTED=true|false into $GITHUB_ENV; the reasons live in qa/inline-request.txt
         run: |
-          set +e  # runner 用 bash -e 跑步骤，这里显式关掉：成败由每步自己判定并 exit
+          set +e  # the runner executes steps with bash -e; turn it off so every check decides its own exit code
           set -uo pipefail
           mkdir -p qa
           {
-            # 触发本次运行的评论正文（issue_comment 事件才有；review_requested 为空）
+            # The comment body that triggered this run (issue_comment only; empty for review_requested)
             printf '%s\n' "${REQUEST_TEXT:-}"
             gh pr view "$PR_NUMBER" --repo "$REPO" --json body --jq '.body // ""' || true
             echo
@@ -344,31 +354,31 @@ jobs:
 
           corpus = pathlib.Path("qa/pr-corpus.txt").read_text(encoding="utf-8", errors="replace")
 
-          # 规则 1：/qa inline 或 /qa inline-review（大小写不敏感，允许中间多个空白）
+          # rule 1: /qa inline or /qa inline-review (case-insensitive, any amount of whitespace in between)
           command = re.compile(r"/qa\s+inline(?:-review)?\b", re.I)
-          # 规则 2：@NeriBot / @neribot（大小写不敏感）与关键词同段
+          # rule 2: @NeriBot / @neribot (case-insensitive) in the same paragraph as a keyword
           mention = re.compile(r"@neribot\b", re.I)
-          keyword = re.compile(r"逐行|行内评论|行内|line-by-line|inline", re.I)
+          keyword = re.compile("\u9010\u884c|\u884c\u5185\u8bc4\u8bba|\u884c\u5185|line-by-line|inline", re.I)  # rule 2 keywords: line-by-line / inline and their CJK forms (escaped)
 
           hits = []
           for index, paragraph in enumerate(re.split(r"\n[ \t]*\n", corpus)):
               if mention.search(paragraph) and keyword.search(paragraph):
-                  hits.append("段#" + str(index) + ": " + re.sub(r"\s+", " ", paragraph).strip()[:180])
+                  hits.append("para#" + str(index) + ": " + re.sub(r"\s+", " ", paragraph).strip()[:180])
 
           command_hits = [m.group(0) for m in command.finditer(corpus)]
-          # 规则 3：本次触发评论（REQUEST_TEXT）里的 /qa inline 或 @NeriBot + 关键词
+          # rule 3: hits inside the comment that triggered this run (REQUEST_TEXT)
           request_text = os.environ.get("REQUEST_TEXT", "")
-          request_hits = [("触发评论 /qa inline: " + m.group(0)) for m in command.finditer(request_text)]
+          request_hits = [("trigger comment /qa inline: " + m.group(0)) for m in command.finditer(request_text)]
           for index, paragraph in enumerate(re.split(r"\n[ \t]*\n", request_text)):
               if mention.search(paragraph) and keyword.search(paragraph):
-                  request_hits.append("触发评论段#" + str(index) + ": " + re.sub(r"\s+", " ", paragraph).strip()[:180])
+                  request_hits.append("trigger comment para#" + str(index) + ": " + re.sub(r"\s+", " ", paragraph).strip()[:180])
 
           requested = bool(command_hits) or bool(hits) or bool(request_hits)
 
           print("INLINE_REQUESTED=" + ("true" if requested else "false"))
-          print("# 规则1（/qa inline 命令）命中: " + (", ".join(command_hits) if command_hits else "无"))
-          print("# 规则2（@NeriBot + 关键词同段）命中: " + str(len(hits)))
-          print("# 规则3（本次触发评论内命中）: " + str(len(request_hits)))
+          print("# rule 1 (/qa inline command) hits: " + (", ".join(command_hits) if command_hits else "none"))
+          print("# rule 2 (@NeriBot + keyword in one paragraph) hits: " + str(len(hits)))
+          print("# rule 3 (hits inside the triggering comment): " + str(len(request_hits)))
           for hit in request_hits:
               print("#   " + hit)
           for hit in hits:
@@ -376,7 +386,7 @@ jobs:
           PY
           if [ "${{ github.event.inputs.inline }}" = "true" ]; then
             sed -i 's/^INLINE_REQUESTED=.*/INLINE_REQUESTED=true/' qa/inline-request.txt
-            echo "# 由 workflow_dispatch 的 inline=true 强制要求 inline 评论" >> qa/inline-request.txt
+            echo "# forced by workflow_dispatch inline=true" >> qa/inline-request.txt
           fi
           grep -E '^INLINE_REQUESTED=(true|false)$' qa/inline-request.txt >> "$GITHUB_ENV"
           grep -vE '^INLINE_REQUESTED=' qa/inline-request.txt >> "$GITHUB_STEP_SUMMARY" || true
@@ -384,15 +394,15 @@ jobs:
 
       - name: Build APK and unit tests
         if: env.PROCEED == 'true'
-        # 构建失败要如实失败；后续步骤统一用 if: !cancelled() 保证 agent 仍然跑起来并写进 review
+        # A failed build must fail honestly; later steps all use if: !cancelled() so the agent still runs and writes the review
         run: |
-          set +e  # runner 用 bash -e 跑步骤，这里显式关掉：成败由每步自己判定并 exit
+          set +e  # the runner executes steps with bash -e; turn it off so every check decides its own exit code
           set -uo pipefail
           mkdir -p qa
           build_status=0
           run_gradle() {
             local log="$1"; shift
-            echo "=== ./gradlew $* ==="
+            echo "> ./gradlew $*"
             ./gradlew "$@" --console=plain > "$log" 2>&1
             local code=$?
             tail -n 40 "$log" || true
@@ -401,11 +411,11 @@ jobs:
 
           run_gradle qa/build-assemble-debug.log :app:assembleDebug || build_status=1
 
-          # 仓库目前没有 androidTest 源码，没有就跳过（避免 "no tests found" 之类的噪声失败）
+          # The repo has no androidTest sources yet, skip when absent (avoids a noisy "no tests found" failure)
           if find app/src/androidTest -type f \( -name '*.kt' -o -name '*.java' \) 2>/dev/null | grep -q .; then
             run_gradle qa/build-assemble-androidtest.log :app:assembleDebugAndroidTest || build_status=1
           else
-            echo "app/src/androidTest 下没有测试源码，跳过 assembleDebugAndroidTest" \
+            echo "no test sources under app/src/androidTest, skipping assembleDebugAndroidTest" \
               | tee qa/build-assemble-androidtest.log
           fi
 
@@ -414,22 +424,22 @@ jobs:
           echo "build_status=$build_status" | tee qa/build-status.txt
           echo "BUILD_STATUS=$build_status" >> "$GITHUB_ENV"
           for f in qa/build-assemble-debug.log qa/test-unit.log; do
-            echo "===== $f (tail 60) ====="; tail -n 60 "$f" 2>/dev/null || true
+            echo "$f (tail 60)"; tail -n 60 "$f" 2>/dev/null || true
           done > qa/build-log-tail.txt
           if [ "$build_status" -ne 0 ]; then
-            echo "::error::构建或单测失败（见 qa/build-*.log 与 qa/test-unit.log），交给 agent 写进 review"
+            echo "::error::build or unit tests failed (see qa/build-*.log and qa/test-unit.log), the agent reports it in the review"
           fi
           exit $build_status
 
 
       - name: Pixel baseline regression
-        # 两种模式显式判定 + 强制重跑 + 「确实跑过测试」硬校验。
-        # 必须加 --rerun-tasks：Roborazzi 的基线 PNG 不是 Gradle 声明的任务输入，
-        # 只用 verifyRoborazziDebug --rerun 时依赖的 testDebugUnitTest 仍会被判 UP-TO-DATE，
-        # 结果就是基线被改了也 BUILD SUCCESSFUL（实测：--rerun 无效，--rerun-tasks 才真跑）。
+        # Two explicit modes plus a forced rerun and a hard "tests really ran" check.
+        # --rerun-tasks is mandatory: Roborazzi baselines are not a declared Gradle task input, so with the
+        # plain verifyRoborazziDebug --rerun the dependent testDebugUnitTest still counts as UP-TO-DATE and
+        # a changed baseline ends in BUILD SUCCESSFUL (measured: --rerun does nothing, --rerun-tasks really runs).
         if: ${{ !cancelled() && env.PROCEED == 'true' }}
         run: |
-          set +e  # runner 用 bash -e 跑步骤，这里显式关掉：成败由每步自己判定并 exit
+          set +e  # the runner executes steps with bash -e; turn it off so every check decides its own exit code
           set -uo pipefail
           BASELINE_DIR=app/src/test/screenshots
           ROBORAZZI_OUT=app/build/outputs/roborazzi
@@ -440,16 +450,16 @@ jobs:
 
           baseline_count=$(find "$BASELINE_DIR" -maxdepth 1 -name '*.png' 2>/dev/null | wc -l)
           if [ "$baseline_count" -eq 0 ]; then MODE=capture; else MODE=verify; fi
-          echo "::notice::像素基线模式=$MODE（入库基线 $baseline_count 张）"
+          echo "::notice::pixel baseline mode=$MODE ($baseline_count baseline images on disk)"
 
-          # 每次运行前清掉上一次的测试报告：没真跑就不会有新的 XML 可以数
+          # Clear the previous test reports before each run: if nothing really ran there is no new XML to count
           STEP_START=$(date +%s)
           rm -f "$RESULTS_DIR"/TEST-*.xml 2>/dev/null || true
 
           cat > qa/pixel-eval.py <<'PY'
           import glob, os, sys, xml.etree.ElementTree as ET
 
-          # 输出：<tests> <failures> <missing_baseline_failures> <fresh_reports>
+          # Prints: <tests> <failures> <missing_baseline_failures> <fresh_reports>
           step_start = int(sys.argv[1]) if len(sys.argv) > 1 else 0
           tests = 0
           failures = 0
@@ -467,7 +477,7 @@ jobs:
                   for failure in case.findall("failure"):
                       failures += 1
                       message = (failure.get("message") or "") + " " + (failure.text or "")
-                      # Roborazzi 在基线不存在时报 "Roborazzi: The original file(...) was not found."
+                      # Roborazzi reports "Roborazzi: The original file(...) was not found." when a baseline is missing
                       if "was not found" in message:
                           missing += 1
           print(tests, failures, missing, fresh)
@@ -477,7 +487,7 @@ jobs:
           failures=0
           missing=0
           fresh=0
-          # tests==0 或没有新报告 = 根本没跑（UP-TO-DATE），一律硬失败，禁止无声通过
+          # tests==0 or no fresh report means nothing ran (UP-TO-DATE): always fail hard, never pass silently
           assert_tests_ran() {
             local label="$1" out
             out=$(python3 qa/pixel-eval.py "$STEP_START" 2>/dev/null) || out="0 0 0 0"
@@ -489,20 +499,20 @@ jobs:
             [ -n "$failures" ] || failures=0
             [ -n "$missing" ] || missing=0
             [ -n "$fresh" ] || fresh=0
-            echo "[$label] 测试报告解析：tests=$tests failures=$failures missing_baseline=$missing fresh_reports=$fresh"
+            echo "[$label] test report parse: tests=$tests failures=$failures missing_baseline=$missing fresh_reports=$fresh"
             if [ "$tests" -le 0 ]; then
-              echo "::error::$label：报告里有 0 个用例，Gradle 多半把 testDebugUnitTest 判成 UP-TO-DATE，本次没有真正比较像素"
+              echo "::error::$label: the reports hold 0 test cases, Gradle most likely marked testDebugUnitTest UP-TO-DATE and no pixel comparison ran"
               return 1
             fi
             if [ "$fresh" -le 0 ]; then
-              echo "::error::$label：$RESULTS_DIR 下没有晚于本次步骤开始时间（$STEP_START）的 XML，判定为未真正运行"
+              echo "::error::$label: no XML under $RESULTS_DIR is newer than this step start ($STEP_START), treating it as not run"
               return 1
             fi
             return 0
           }
 
           capture_baselines() {
-            echo "== 采集模式：recordRoborazziDebug --rerun-tasks =="
+            echo "capture mode: recordRoborazziDebug --rerun-tasks"
             ./gradlew :app:recordRoborazziDebug --rerun-tasks -Proborazzi.test.record=true \
               --console=plain > qa/roborazzi-record.log 2>&1
             local code=$?
@@ -517,13 +527,13 @@ jobs:
             local collected
             collected=$(find "$CAND" -maxdepth 1 -name '*.png' | wc -l)
             if [ "$code" -ne 0 ] || [ "$collected" -eq 0 ]; then
-              echo "::error::基线采集失败（record exit=$code，tests=$tests，采集 $collected 张），见 qa/roborazzi-record.log"
+              echo "::error::baseline capture failed (record exit=$code, tests=$tests, collected $collected images), see qa/roborazzi-record.log"
               echo "pixel_mode=capture pixel_status=capture-failed collected=$collected tests=$tests exit=$code" \
                 > qa/pixel-status.txt
               return 1
             fi
-            echo "首次采集 $collected 张候选基线 → $CAND（待人工提交到 $BASELINE_DIR）"
-            echo "pixel_mode=capture pixel_status=captured collected=$collected tests=$tests note=首次采集，待人工提交基线" \
+            echo "first capture produced $collected candidate baselines -> $CAND (to be committed to $BASELINE_DIR by hand)"
+            echo "pixel_mode=capture pixel_status=captured collected=$collected tests=$tests note=first capture, baselines await a manual commit" \
               > qa/pixel-status.txt
             return 0
           }
@@ -532,7 +542,7 @@ jobs:
           if [ "$MODE" = "capture" ]; then
             capture_baselines || STATUS=1
           else
-            echo "== 校验模式：verifyRoborazziDebug --rerun-tasks（$baseline_count 张基线）=="
+            echo "verify mode: verifyRoborazziDebug --rerun-tasks ($baseline_count baselines)"
             ./gradlew :app:verifyRoborazziDebug --rerun-tasks -Proborazzi.test.verify=true \
               --console=plain > qa/roborazzi-verify.log 2>&1
             verify_exit=$?
@@ -543,15 +553,15 @@ jobs:
               echo "pixel_mode=verify pixel_status=verify-no-tests exit=$verify_exit" > qa/pixel-status.txt
               STATUS=1
             elif [ "$verify_exit" -eq 0 ]; then
-              echo "像素回归通过（$baseline_count 张基线，$tests 个用例）"
+              echo "pixel regression passed ($baseline_count baselines, $tests test cases)"
               echo "pixel_mode=verify pixel_status=passed baselines=$baseline_count tests=$tests" > qa/pixel-status.txt
             elif [ "$failures" -gt 0 ] && [ "$failures" -eq "$missing" ]; then
-              echo "::warning::基线文件缺失（failures=$failures 全部是 was not found），按约定转入采集模式，不判定失败"
+              echo "::warning::baseline files are missing (all $failures failures are 'was not found'), falling back to capture mode per convention, not treated as a failure"
               capture_baselines || STATUS=1
             else
               diff_count=$((failures - missing))
               images=$(find "$DIFF" -maxdepth 1 -name '*.png' | wc -l)
-              echo "::error::像素回归发现 $diff_count 处差异（差异/实际图 $images 张已放到 $DIFF），详见 qa/roborazzi-verify.log"
+              echo "::error::pixel regression found $diff_count difference(s) (diff/actual images at $DIFF), see qa/roborazzi-verify.log"
               echo "pixel_mode=verify pixel_status=failed baselines=$baseline_count tests=$tests diffs=$diff_count" \
                 > qa/pixel-status.txt
               STATUS=1
@@ -559,20 +569,20 @@ jobs:
           fi
 
           {
-            echo "### 像素基线回归"
+            echo "### Pixel baseline regression"
             echo
-            echo "判定规则：$BASELINE_DIR 下没有 PNG → 采集模式；有 PNG → 校验模式（差异即失败）。"
-            echo "两条命令都带 --rerun-tasks，并用测试报告 XML 的用例数与时间戳证明真的跑过。"
+            echo "Rule: no PNG under $BASELINE_DIR -> capture mode; PNGs present -> verify mode (any diff fails)."
+            echo "Both commands use --rerun-tasks, and the case count plus mtime of the test report XML prove they really ran."
             echo
-            echo "    $(cat qa/pixel-status.txt 2>/dev/null || echo 'pixel-status 缺失')"
+            echo "    $(cat qa/pixel-status.txt 2>/dev/null || echo 'pixel-status missing')"
           } >> "$GITHUB_STEP_SUMMARY"
 
           exit $STATUS
 
 
-      - name: Write QA helper（uiautomator 小工具，agent 可选用）
-        # 把踩过的坑固化成工具：零面积节点过滤、content-desc 优先、可点击祖先、界面指纹。
-        # 只是起点：agent 也可以自己写脚本；这个文件不参与构建。
+      - name: Write QA helper
+        # Freeze the traps we hit into a tool: zero-area node filtering, content-desc first, clickable ancestor, screen fingerprint.
+        # Only a starting point: the agent may write its own scripts; this file is not part of the build.
         if: ${{ !cancelled() && env.PROCEED == 'true' }}
         run: |
           set -euo pipefail
@@ -580,14 +590,14 @@ jobs:
           cat > qa/ui.py <<'PY'
           import os, re, sys, xml.etree.ElementTree as ET
 
-          # 输出固定 UTF-8：否则在某些 locale（如 GBK 控制台）下中文文案会和 UTF-8 的匹配串对不上
+          # Pin stdout to UTF-8: under some locales (e.g. a GBK console) CJK labels would not match the UTF-8 patterns
           try:
               sys.stdout.reconfigure(encoding="utf-8", errors="replace")
           except Exception:
               pass
 
           BOUNDS = re.compile(r"\[(-?\d+),(-?\d+)\]\[(-?\d+),(-?\d+)\]")
-          MIN_SIZE = 2  # 宽或高 <= 2px 视为零面积节点：accessibility 上点不到，一律跳过
+          MIN_SIZE = 2  # width or height <= 2px means a zero-area node: unreachable for accessibility, always skipped
           HIT_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "last-hit.txt")
 
 
@@ -621,7 +631,7 @@ jobs:
 
 
           def clickable_target(node, chain):
-              # 优先自身可点击；否则向上找最近的可点击祖先（设置行里 Text 挂在可点 Row 下的常见形态）
+              # Prefer the node itself; otherwise climb to the nearest clickable ancestor (a Text inside a clickable Row is common)
               for candidate in [node] + list(reversed(chain)):
                   if candidate.get("clickable") == "true" and bbox(candidate):
                       return candidate
@@ -631,7 +641,7 @@ jobs:
           def describe(node, box, how):
               label = (node.get("content-desc") or node.get("text") or "").strip()[:40]
               x1, y1, x2, y2 = box
-              return how + " label=" + (label or "<空>") + " bounds=[" + ",".join(str(v) for v in (x1, y1, x2, y2)) + "]"
+              return how + " label=" + (label or "<empty>") + " bounds=[" + ",".join(str(v) for v in (x1, y1, x2, y2)) + "]"
 
 
           def remember(text):
@@ -661,7 +671,7 @@ jobs:
                   if target is None:
                       continue
                   box = bbox(target)
-                  # 打分：content-desc 命中优先，其次可点击节点，同分取面积更小的叶子控件
+                  # Score: content-desc hits first, then clickable nodes; ties go to the smaller leaf widget
                   score = (2 if via_desc else 0) + (1 if target.get("clickable") == "true" else 0)
                   area = (box[2] - box[0]) * (box[3] - box[1])
                   matched = (desc if via_desc else text).strip()[:40]
@@ -679,7 +689,7 @@ jobs:
 
 
           def cmd_rightmost_top(path):
-              # 兜底启发式：content-desc 全空时，取顶部栏最右侧的可点击窄节点（= 设置入口）
+              # Fallback heuristic: when every content-desc is empty, take the rightmost narrow clickable node in the top bar (= settings entry)
               root = load(path)
               if root is None:
                   return 1
@@ -695,9 +705,9 @@ jobs:
                   box = bbox(node)
                   if box is None:
                       continue
-                  if box[2] - box[0] > width * 0.6:  # 整行容器不算图标
+                  if box[2] - box[0] > width * 0.6:  # a full-width row is not an icon
                       continue
-                  if box[3] > height * 0.30:         # 只认顶部栏
+                  if box[3] > height * 0.30:         # top bar only
                       continue
                   if best is None or box[2] > best[0][2]:
                       best = (box, node)
@@ -762,7 +772,7 @@ jobs:
 
 
           def cmd_equals_text(path, pattern):
-              # 整串相等（strip 后比较），pattern 用 | 分隔多个候选；不做子串匹配
+              # Whole-string equality after strip; pattern splits on | into candidates, no substring matching
               root = load(path)
               if root is None:
                   return 1
@@ -801,7 +811,7 @@ jobs:
           sys.exit(main(sys.argv))
           PY
           python3 -c "import ast; ast.parse(open('qa/ui.py', encoding='utf-8').read())"
-          echo "qa/ui.py ready ($(wc -l < qa/ui.py) 行)"
+          echo "qa/ui.py ready ($(wc -l < qa/ui.py) lines)"
 
 
       - name: Build agent prompt
@@ -812,7 +822,7 @@ jobs:
           PIXEL_STATUS=$(cat qa/pixel-status.txt 2>/dev/null || echo 'pixel_status=unknown')
           export BUILD_STATUS PIXEL_STATUS
           APK_LIST=$(ls -1 app/build/outputs/apk/debug/*.apk 2>/dev/null | sed 's#^#    - #') || true
-          [ -n "$APK_LIST" ] || APK_LIST='    （没有 APK：构建失败，本次没有真机验证，报告里必须如实写明）'
+          [ -n "$APK_LIST" ] || APK_LIST='    (no APK: the build failed, so nothing was verified on a device; say so plainly in the report)'
           export APK_LIST
           cat > qa-prompt.tpl.txt <<'PROMPT_EOF'
           你是 NekoWeather 仓库的 QA bot（GitHub 账号 @@BOT_LOGIN@@）。
@@ -975,7 +985,7 @@ jobs:
           for key in keys:
               tpl = tpl.replace("@@" + key + "@@", os.environ.get(key) or "")
           pathlib.Path('qa-prompt.txt').write_text(tpl, encoding='utf-8')
-          print("prompt 行数:", tpl.count(chr(10)) + 1)
+          print("prompt lines:", tpl.count(chr(10)) + 1)
           PY
 
 
@@ -1001,7 +1011,7 @@ jobs:
         # Hard ceiling: a single review must never burn three hours again.
         timeout-minutes: 70
         env:
-          # 会话 id 带 run 标识，便于在 dsh home 的 sessions/ 目录里对应排查
+          # The session id carries the run identity so it maps to the sessions/ directory in the dsh home
           NERIBOT_SESSION_ID: qa-run-${{ github.run_id }}-${{ github.run_attempt }}
           NERIBOT_EFFORT: high
           NERIBOT_DSH_PATCH: /tmp/neribot-shell-timeout.yml
@@ -1009,7 +1019,7 @@ jobs:
           RUN_ID: ${{ github.run_id }}
           ATTEMPT: ${{ github.run_attempt }}
           NERIBOT_UI_SHOTS_DIR: ${{ github.workspace }}/qa/ui-shots
-          # 两档 AVD / serial 由镜像脚本管理，这里只把名字交给 agent
+          # The image script owns both AVDs and serials; only the names are handed to the agent
           NERIBOT_AVD_LIST: 'neribot-api30,neribot-api35'
           NERIBOT_API_LIST: '30,35'
         run: |
@@ -1026,12 +1036,12 @@ jobs:
 
 
       - name: Ensure review posted
-        # 失败也要跑：构建环境坏了不能让请求者干等，至少留一条说明
+        # Also runs on failure: a broken build environment must not leave the requester waiting, at least leave a note
         if: ${{ !cancelled() && env.PROCEED == 'true' }}
         run: |
           set -euo pipefail
-          # add 同时兼容「每页一个数组」与「单文档即数组」两种形状；
-          # 查询本身失败时置空，让下面的分支给出可读原因而不是被 -e 直接掐死。
+          # add handles both shapes (one array per page and a single array document);
+          # if the query itself fails, blank it so the branches below can give a readable reason instead of dying on -e.
           POSTED=$(gh api --paginate "repos/$REPO/pulls/$PR_NUMBER/reviews?per_page=100" 2>/dev/null \
             | jq -s 'add // []' \
             | jq --arg bot "$BOT_LOGIN" --arg marker "$QA_MARKER" '
@@ -1040,7 +1050,7 @@ jobs:
                   and .state != "PENDING"
                   and ((.body // "") | contains($marker)))' 2>/dev/null) || POSTED=""
 
-          # inline 校验：仅在要求 inline 时检查，且只警告不判定失败
+          # inline check: only when inline was requested, and it only warns, it never fails the run
           INLINE_FLAG="${INLINE_REQUESTED:-false}"
           p0=0; p1=0; inline=0
           if [ -f qa/report-summary.json ] && jq -e . qa/report-summary.json >/dev/null 2>&1; then
@@ -1048,29 +1058,29 @@ jobs:
             p1=$(jq -r '(.p1 // 0) | tonumber' qa/report-summary.json 2>/dev/null || echo 0)
             inline=$(jq -r '(.inline // 0) | tonumber' qa/report-summary.json 2>/dev/null || echo 0)
           else
-            echo "::warning::没有 qa/report-summary.json，inline 校验降级为不检查"
+            echo "::warning::qa/report-summary.json is missing, the inline check is skipped"
           fi
           high=$((p0 + p1))
           echo "INLINE_REQUESTED=$INLINE_FLAG | P0=$p0 P1=$p1 | inline=$inline"
           if [ "$INLINE_FLAG" = "true" ]; then
             if [ "$high" -eq 0 ] && [ "$inline" -eq 0 ]; then
-              echo "P0/P1 条数为 0，确实没有可 inline 的发现 —— 允许没有 inline 评论"
+              echo "0 P0/P1 findings, so there is nothing to inline; no inline comment is expected"
             elif [ "$inline" -eq 0 ]; then
-              echo "::warning::INLINE_REQUESTED=true 且报告里有 $high 条 P0/P1，但没有 inline 评论（不判定失败，仅记录）"
+              echo "::warning::INLINE_REQUESTED=true and the report has $high P0/P1 finding(s), but no inline comment was posted (recorded, not a failure)"
             else
-              echo "inline 评论 $inline 条"
+              echo "inline comments: $inline"
             fi
           else
             if [ "$inline" -ne 0 ]; then
-              echo "::warning::本次没有请求 inline，但 agent 报告了 $inline 条 inline 评论"
+              echo "::warning::inline was not requested, but the agent reported $inline inline comment(s)"
             fi
           fi
 
           if [ "$POSTED" = "true" ]; then
-            echo "NeriBot 的 QA review 已提交到 PR #$PR_NUMBER"
+            echo "NeriBot QA review posted to PR #$PR_NUMBER"
             exit 0
           fi
           gh pr comment "$PR_NUMBER" --repo "$REPO" --body \
-            "QA 测试没有产出报告，本次运行已失败；请查看本次 Actions 运行日志，修复后在 PR 下评论 /qa 重试。"
-          echo "::error::agent 结束但没有提交带标记的 review"
+            "QA run produced no report and this run has failed; see the Actions log, fix it and comment /qa on the PR to retry."
+          echo "::error::agent finished without posting a review carrying the marker"
           exit 1

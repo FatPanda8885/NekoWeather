@@ -1,38 +1,41 @@
-# NeriBot —— NekoWeather 的 issue 复现调查 bot（复刻 animeko openanibot 的 issue 调查模式）
+# NeriBot -- issue reproduction / investigation bot for NekoWeather (animeko openanibot's issue mode)
 #
-# 运行环境: 自托管 runner（标签 neribot），来自独立仓库 FatPanda8885/NeriBot 的容器镜像
-#           （内含 JDK17 / Android SDK / gh / DeepSeek Harness SDK / 模拟器脚本）
-# Agent:    DeepSeek Harness Python SDK（镜像内 /usr/local/bin/neribot_agent.py）
-#           默认 model=deepseek-flash、reasoning_effort=max；复现推理比审查更吃模型，
-#           可用仓库变量 NERIBOT_ISSUE_MODEL / NERIBOT_ISSUE_EFFORT 覆盖。
-# 密钥:     不使用任何 GitHub secret。GH_TOKEN（bot 账号 PAT）与 DEEPSEEK_API_KEY 由 runner 容器注入，
-#           ——本 workflow 不得在 env 里引用它们，空的 secret 会覆盖容器注入的值。
+# Runtime: self-hosted runner (label neribot) from the standalone repository FatPanda8885/NeriBot image
+#          (bundles JDK17 / Android SDK / gh / DeepSeek Harness SDK / emulator scripts)
+# Agent:    DeepSeek Harness Python SDK (/usr/local/bin/neribot_agent.py in the image)
+#           defaults to model=deepseek-flash, reasoning_effort=max; reproduction needs more reasoning than
+#           review, and the repo variables NERIBOT_ISSUE_MODEL / NERIBOT_ISSUE_EFFORT can override both.
+# Secrets:  no GitHub secret is used. GH_TOKEN (bot account PAT) and DEEPSEEK_API_KEY are injected by the
+#           runner container -- this workflow must never reference them in env, an empty secret would
+#           override the container-injected value.
 #
-# 触发（一律按需，默认不跑；不订阅 issues.opened —— 服务器常开之前，每开一个 issue
-#       就排一个永远 Queued 的 job 没有意义）:
-#   1. 给 issue 打 neribot / qa 标签（大小写四种写法）  -> 开始复现调查
-#   2. 在 issue（不是 PR）下评论 @NeriBot 或 /investigate -> 重新调查，排除 bot 自己
-# 授权: 只有仓库 owner 本人，或 author_association 为 OWNER/MEMBER 的人能触发，其余静默跳过（不是失败）。
-#       打标签本身就需要 triage/write 权限，因此 labeled 分支同样只认这两种身份。
-# 产物: 只在 issue 下留一条带 ISSUE_MARKER 的报告评论；不改标题/标签/状态，不碰任何 PR。
-# 部署与运维文档: https://github.com/FatPanda8885/NeriBot
+# Triggers (on demand only, nothing runs by default; issues.opened is deliberately not subscribed --
+#           before the server runs permanently, every new issue would only queue a job that stays Queued):
+#   1. add the neribot / qa label to an issue (four casings)     -> start the investigation
+#   2. comment @NeriBot or /investigate on an issue (not a PR)   -> investigate again, the bot itself is ignored
+# Authorization: only the repo owner and people with author_association OWNER/MEMBER can trigger it;
+#           everyone else is skipped silently (not a failure). Labeling itself needs triage/write, so the
+#           labeled branch accepts the same two identities only.
+# Output:   exactly one report comment carrying ISSUE_MARKER on the issue; no title/label/state change
+#           and no PR is touched.
+# Deployment and operations docs: https://github.com/FatPanda8885/NeriBot
 
 name: NeriBot Issue QA
 
 on:
-  # 只认「打 neribot / qa 标签」，不订阅 opened
+  # only the neribot / qa labels are accepted, issues.opened is not subscribed
   issues:
     types: [labeled]
   issue_comment:
     types: [created]
 
-# 同一个 issue 只保留最新一次调查
+# keep only the latest investigation per issue
 concurrency:
   group: neribot-issue-${{ github.event.issue.number }}
   cancel-in-progress: true
 
 env:
-  # bot 账号登录名（preflight 会校验 GH_TOKEN 的身份与此一致）
+  # bot account login (preflight verifies that GH_TOKEN belongs to this account)
   BOT_LOGIN: NeriBot
 
 jobs:
@@ -68,54 +71,54 @@ jobs:
       REPO: ${{ github.repository }}
       ISSUE_NUMBER: ${{ github.event.issue.number }}
       ANDROID_HOME: /opt/android-sdk
-      # 截图与临时产物目录（agent 用这个，不要自己找路径）
+      # screenshot and scratch output directory (the agent uses this one instead of guessing paths)
       NERIBOT_UI_OUT_DIR: /tmp/neribot-issue-shots
-      # 截图图床（镜像契约：neribot-gh-image.sh 走 GitHub Contents API 上传到 public 仓库）
-      # 目录：<source_repo>/<issue|pr>/<编号>/<文件名>，raw 直链可匿名访问
+      # screenshot host (image contract: neribot-gh-image.sh uploads through the GitHub Contents API to a public repo)
+      # layout: <source_repo>/<issue|pr>/<number>/<file>, the raw link is anonymously readable
       NERIBOT_IMAGE_REPO: NeriBot/ImageGallery
       NERIBOT_IMAGE_BRANCH: main
       NERIBOT_IMAGE_SOURCE_REPO: ${{ github.repository }}
       NERIBOT_IMAGE_KIND: issue
       NERIBOT_IMAGE_NUMBER: ${{ github.event.issue.number }}
-      # 兜底：主图床不可用时退回 release 资产
+      # fallback: use release assets when the primary image host is unavailable
       NERIBOT_IMAGE_FALLBACK_REPO: FatPanda8885/NeriBot
       NERIBOT_IMAGE_TAG: qa-assets
-      # agent 必须把这行标记原样贴进报告末尾，最后一步据此确认评论确实发了
+      # the agent must paste this marker verbatim at the end of the report, the last step uses it to confirm the comment was really posted
       ISSUE_MARKER: '<!-- neribot:issue-qa run=${{ github.run_id }}.${{ github.run_attempt }} -->'
     steps:
       - name: Preflight
         run: |
           set -euo pipefail
-          command -v python3 >/dev/null || { echo "::error::python3 未安装"; exit 1; }
-          test -x /usr/local/bin/neribot_agent.py || { echo "::error::neribot_agent.py 缺失（runner 镜像来自 FatPanda8885/NeriBot，请更新镜像）"; exit 1; }
-          command -v gh     >/dev/null || { echo "::error::gh 未安装"; exit 1; }
-          command -v jq     >/dev/null || { echo "::error::jq 未安装"; exit 1; }
-          test -n "${GH_TOKEN:-}" || { echo "::error::容器环境缺少 GH_TOKEN（服务器 docker/.env 的 NERIBOT_TOKEN 未配置或未重启容器）"; exit 1; }
-          test -n "${DEEPSEEK_API_KEY:-}" || { echo "::error::容器环境缺少 DEEPSEEK_API_KEY（服务器 docker/.env 未配置或未重启容器）"; exit 1; }
+          command -v python3 >/dev/null || { echo "::error::python3 is not installed"; exit 1; }
+          test -x /usr/local/bin/neribot_agent.py || { echo "::error::neribot_agent.py is missing (runner image comes from FatPanda8885/NeriBot, update the image)"; exit 1; }
+          command -v gh     >/dev/null || { echo "::error::gh is not installed"; exit 1; }
+          command -v jq     >/dev/null || { echo "::error::jq is not installed"; exit 1; }
+          test -n "${GH_TOKEN:-}" || { echo "::error::container env is missing GH_TOKEN (docker/.env NERIBOT_TOKEN not configured, or the container was not restarted)"; exit 1; }
+          test -n "${DEEPSEEK_API_KEY:-}" || { echo "::error::container env is missing DEEPSEEK_API_KEY (docker/.env not configured, or the container was not restarted)"; exit 1; }
           LOGIN=$(gh api user --jq .login)
-          test "$LOGIN" = "$BOT_LOGIN" || { echo "::error::NERIBOT_TOKEN 的身份是 $LOGIN，与 workflow 顶部 env.BOT_LOGIN（$BOT_LOGIN）不一致"; exit 1; }
-          # 复现链路的可选依赖: 缺失只告警不失败，JVM 单测路径不需要它们
-          [ -e /dev/kvm ] || echo "::warning::/dev/kvm 不可用，UI 复现（模拟器）链路大概率失败，只能覆盖 JVM 单测路径"
-          [ -x /usr/local/bin/neribot-emulator.sh ] || echo "::warning::缺少 /usr/local/bin/neribot-emulator.sh，UI 复现链路不可用"
-          [ -x /usr/local/bin/neribot-gh-image.sh ] || echo "::warning::缺少 /usr/local/bin/neribot-gh-image.sh，报告里无法贴截图"
+          test "$LOGIN" = "$BOT_LOGIN" || { echo "::error::NERIBOT_TOKEN belongs to $LOGIN, which does not match env.BOT_LOGIN ($BOT_LOGIN) at the top of the workflow"; exit 1; }
+          # Optional dependencies of the reproduction path: warn only, the JVM unit test path does not need them
+          [ -e /dev/kvm ] || echo "::warning::/dev/kvm is unavailable, UI reproduction (emulator) will most likely fail, only the JVM unit test path is covered"
+          [ -x /usr/local/bin/neribot-emulator.sh ] || echo "::warning::/usr/local/bin/neribot-emulator.sh is missing, UI reproduction is unavailable"
+          [ -x /usr/local/bin/neribot-gh-image.sh ] || echo "::warning::/usr/local/bin/neribot-gh-image.sh is missing, screenshots cannot be attached to the report"
           echo "agent ok | gh ok | bot=$LOGIN | issue #$ISSUE_NUMBER"
 
-      - name: Ack issue（在 issue 上打 👀，表示已接单）
+      - name: Ack issue
         run: |
           set -euo pipefail
           gh api -X POST "repos/$REPO/issues/$ISSUE_NUMBER/reactions" \
             --header 'Accept: application/vnd.github+json' -f content=eyes >/dev/null \
-            || echo "::warning::无法添加 👀 reaction（缺 issues:write 或 API 抖动），继续调查"
-          echo "已接单: issue #$ISSUE_NUMBER"
+            || echo "::warning::could not add the eyes reaction (missing issues:write or an API hiccup), continuing the investigation"
+          echo "acknowledged: issue #$ISSUE_NUMBER"
 
-      - name: Resolve default branch & issue 里的版本线索
+      - name: Resolve default branch and version hints
         run: |
           set -euo pipefail
           DEFAULT_BRANCH=$(gh api "repos/$REPO" --jq .default_branch)
           echo "DEFAULT_BRANCH=$DEFAULT_BRANCH" >> "$GITHUB_ENV"
           mkdir -p "$NERIBOT_UI_OUT_DIR"
           BODY=$(gh issue view "$ISSUE_NUMBER" --repo "$REPO" --json body --jq .body)
-          # 版本号与 40 位 commit sha 线索；issue 没给就留空，prompt 里会写成"未指定"
+          # Version and 40-char commit sha hints; left empty when the issue gives none, the prompt then says "not specified"
           HINT=$(printf '%s\n' "$BODY" \
             | grep -Eio 'v?[0-9]+\.[0-9]+\.[0-9]+([-a-z0-9.]*)?|\b[0-9a-f]{40}\b' \
             | sort -u | paste -sd ' ' - || true)
@@ -124,13 +127,13 @@ jobs:
             echo "${HINT:-}"
             echo 'NERIBOT_EOF'
           } >> "$GITHUB_ENV"
-          echo "issue #$ISSUE_NUMBER 无 head 分支，改用默认分支 $DEFAULT_BRANCH；版本线索: ${HINT:-（issue 未给出）}"
+          echo "issue #$ISSUE_NUMBER has no head branch, using the default branch $DEFAULT_BRANCH; version hints: ${HINT:-(not given in the issue)}"
 
       - uses: actions/checkout@v4
         with:
           ref: ${{ env.DEFAULT_BRANCH }}
 
-      - name: Link Cubism SDK（被 .gitignore 排除，常驻 /opt，checkout 后符号链接进来）
+      - name: Link Cubism SDK
         run: ln -sfn /opt/cubism-sdk .cubism-sdk
 
       - name: Build agent prompt
@@ -160,9 +163,9 @@ jobs:
             echo "- 最后打印简短总结（结论、已复现/未确认条数、是否已发评论）。"
           } > issue-prompt.txt
 
-      - name: Run agent (DeepSeek Harness，复现推理吃模型，可用仓库变量覆盖)
+      - name: Run agent (DeepSeek Harness, reproduction reasoning is model heavy, overridable by repo variables)
         env:
-          # 会话 id 带 run 标识，便于在 dsh home 的 sessions/ 目录里对应排查
+          # The session id carries the run identity so it maps to the sessions/ directory in the dsh home
           NERIBOT_SESSION_ID: issue-run-${{ github.run_id }}-${{ github.run_attempt }}
           DSH_CONTEXT_WINDOW: '1000000'
           NERIBOT_MODEL: ${{ vars.NERIBOT_ISSUE_MODEL || 'deepseek-flash' }}
@@ -174,11 +177,11 @@ jobs:
           CODE=$?
           set -e
           tail -n 40 issue-agent.log || true
-          echo "agent exit=$CODE（完整输出留在 runner 工作目录 issue-agent.log，会话日志在 ~/.dsh/sessions/）"
+          echo "agent exit=$CODE (full output kept in issue-agent.log in the runner workspace, session log in ~/.dsh/sessions/)"
           exit $CODE
 
       - name: Ensure comment posted
-        # 失败也要跑: 用来判定 agent 到底有没有把报告发出去，不替它补评论
+        # Also runs on failure: it decides whether the agent actually posted the report, it never posts one for it
         if: ${{ !cancelled() }}
         run: |
           set -euo pipefail
@@ -189,8 +192,8 @@ jobs:
                   ((.user.login // "") == $bot)
                   and ((.body // "") | contains($marker)))')
           if [ "$POSTED" = "true" ]; then
-            echo "NeriBot 的复现报告已提交到 issue #$ISSUE_NUMBER"
+            echo "NeriBot reproduction report posted to issue #$ISSUE_NUMBER"
             exit 0
           fi
-          echo "::error::agent 结束但没有在 issue #$ISSUE_NUMBER 下提交带 ISSUE_MARKER 的评论"
+          echo "::error::agent finished without posting a comment carrying ISSUE_MARKER on issue #$ISSUE_NUMBER"
           exit 1
