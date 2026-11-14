@@ -873,7 +873,11 @@ jobs:
               adb shell "run-as com.neko.weather sh -c 'mkdir -p shared_prefs && cat > shared_prefs/neko_weather.xml'" <<'XML'
               <?xml version='1.0' encoding='utf-8' standalone='yes' ?><map><boolean name="onboardingCompleted" value="true" /></map>
               XML
+          - gh 的配置不在默认位置（不是你的 HOME），所以每次调用 gh 前先指过去：
+              export GH_CONFIG_DIR=/home/runner/.config/gh
+              gh auth status            # 应显示 NeriBot
           - 截图与上传（先用 gh 把 token 导进环境，脚本只认 GH_TOKEN）：
+              export GH_CONFIG_DIR=/home/runner/.config/gh
               export GH_TOKEN="$(gh auth token 2>/dev/null)"
               adb exec-out screencap -p > /tmp/xxx.png
               /usr/local/bin/neribot-gh-image.sh /tmp/xxx.png
@@ -1048,6 +1052,10 @@ jobs:
         if: ${{ !cancelled() && env.PROCEED == 'true' }}
         run: |
           set +e
+          # gh resolves its config from GH_CONFIG_DIR / HOME, and the agent's shell has a
+          # trimmed environment, so pin an absolute path here and tell the prompt to use it.
+          export GH_CONFIG_DIR=/home/runner/.config/gh
+          mkdir -p "$GH_CONFIG_DIR"
           if [ -n "${GH_TOKEN:-}" ]; then
             printf '%s\n' "$GH_TOKEN" | gh auth login --with-token --hostname github.com >/dev/null 2>&1
             chmod 600 "$HOME/.config/gh/hosts.yml" 2>/dev/null || true
