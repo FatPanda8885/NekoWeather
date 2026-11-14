@@ -229,6 +229,10 @@ jobs:
 
           for c in python3 gh jq adb java; do
             command -v "$c" >/dev/null || err "missing command $c (incomplete runner image, update the FatPanda8885/NeriBot image)"
+          # GH_TOKEN and DEEPSEEK_API_KEY come from the container env, not from Actions
+          # secrets, so the runner does not mask them on its own.
+          if [ -n "${GH_TOKEN:-}" ]; then echo "::add-mask::$GH_TOKEN"; fi
+          if [ -n "${DEEPSEEK_API_KEY:-}" ]; then echo "::add-mask::$DEEPSEEK_API_KEY"; fi
           done
           test -x /usr/local/bin/neribot_agent.py \
             || err "/usr/local/bin/neribot_agent.py is missing (runner image comes from FatPanda8885/NeriBot, update the image)"
@@ -878,6 +882,9 @@ jobs:
           - 提交 review 与上传截图之前先 gh auth status 确认身份是 NeriBot。如果身份不对，不要从 .git/config
             里取 token（那是 Actions 的 GITHUB_TOKEN，只能以 github-actions[bot] 身份发言，而且对图床没有写权限），
             直接把身份异常写进报告的【未测试与环境】。
+          - 凭据只由 gh 自己持有：不要读取、打印、grep 或上传任何凭据文件
+            （~/.config/gh/hosts.yml、.git/config、/home/runner/.env、以及任何环境变量的值），
+            报告里也不允许出现 token 片段。
           - 像素基线回归失败时，差异图在 qa/ui-shots/baseline-diff/
             （*_compare.png 是对比图、*_actual.png 是本次实际渲染），可以作为证据上传后贴进表格。
           - logcat：adb logcat -d -v threadtime | grep -Ei 'FATAL EXCEPTION|ANR in |E/AndroidRuntime'
@@ -1026,6 +1033,7 @@ jobs:
           set +e
           if [ -n "${GH_TOKEN:-}" ]; then
             printf '%s\n' "$GH_TOKEN" | gh auth login --with-token --hostname github.com >/dev/null 2>&1
+            chmod 600 "$HOME/.config/gh/hosts.yml" 2>/dev/null || true
             echo "gh auth: $(gh api user --jq .login 2>/dev/null || echo unknown)"
           else
             echo "::warning::GH_TOKEN is empty; the agent will post with the wrong identity"
