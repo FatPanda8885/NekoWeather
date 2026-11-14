@@ -882,6 +882,9 @@ jobs:
           - 提交 review 与上传截图之前先 gh auth status 确认身份是 NeriBot。如果身份不对，不要从 .git/config
             里取 token（那是 Actions 的 GITHUB_TOKEN，只能以 github-actions[bot] 身份发言，而且对图床没有写权限），
             直接把身份异常写进报告的【未测试与环境】。
+          - 本 run 只允许提交一次 review。提交前确认 gh auth status 的身份是 NeriBot、图片链接是 raw 直链；
+            如果第一次提交后发现身份不对或图没传上，禁止再发第二条去覆盖（历史上有过同一 run 发两条、
+            一条 github-actions[bot] 一条 NeriBot 的事故），把问题写进报告的【未测试与环境】即可。
           - 凭据只由 gh 自己持有：不要读取、打印、grep 或上传任何凭据文件
             （~/.config/gh/hosts.yml、.git/config、/home/runner/.env、以及任何环境变量的值），
             报告里也不允许出现 token 片段。
