@@ -109,6 +109,35 @@ class WeatherNotificationContentTest {
         assertTrue(text, text.contains("上升"))
     }
 
+    /** 早间通知必须按日历日取「今天」，两个供应商的数组起点不同，下标一定会有一个取错。 */
+    @Test
+    fun morningForecastUsesTheCalendarDayNotAnIndex() {
+        // Open-Meteo 形态：daily[0] 是昨天
+        val withPastDay = dashboard(
+            listOf(
+                day("2026-11-14", 15.0, 25.0, "晴"),
+                day("2026-11-15", -5.0, 5.0, "阴"),
+                day("2026-11-16", 0.0, 10.0, "小雨"),
+            ),
+        )
+        assertEquals(
+            "2026-11-15",
+            WeatherNotificationPublisher.dailyFor(withPastDay, LocalDate.of(2026, 11, 15))?.date,
+        )
+
+        // QWeather 形态：daily[0] 就是今天
+        val withoutPastDay = dashboard(
+            listOf(
+                day("2026-11-15", -5.0, 5.0, "阴"),
+                day("2026-11-16", 0.0, 10.0, "小雨"),
+            ),
+        )
+        assertEquals(
+            "2026-11-15",
+            WeatherNotificationPublisher.dailyFor(withoutPastDay, LocalDate.of(2026, 11, 15))?.date,
+        )
+    }
+
     @Test
     fun weeklyOverviewIsNullWithoutForecast() {
         val text = WeatherNotificationPublisher.weeklyOverview(dashboard(emptyList()), LocalDate.of(2026, 10, 25))

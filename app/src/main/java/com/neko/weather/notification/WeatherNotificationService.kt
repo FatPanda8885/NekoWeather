@@ -99,10 +99,14 @@ object WeatherNotificationPublisher {
 
         if (settings.morningEnabled && now.hour in 6..10 && prefs.getString("morning", "") != today) {
             val current = weather.current
-            val todayForecast = weather.daily.getOrNull(1) ?: weather.daily.firstOrNull()
+            val todayForecast = dailyFor(weather, now.toLocalDate())
+            // 没有今天的高低温时不要留悬空逗号
+            val range = todayForecast
+                ?.let { "，${formatTemperature(it.low, unit)}～${formatTemperature(it.high, unit)}" }
+                .orEmpty()
             notify(
                 context, 1001, "forecast", l("${current.location}今日天气"),
-                l("${current.condition} ${formatTemperature(current.temperature, unit)}，${todayForecast?.let { "${formatTemperature(it.low, unit)}～${formatTemperature(it.high, unit)}" }.orEmpty()}"),
+                l("${current.condition} ${formatTemperature(current.temperature, unit)}$range"),
             )
             prefs.edit().putString("morning", today).apply()
         }
@@ -145,6 +149,21 @@ object WeatherNotificationPublisher {
      * 只有未来预报、没有历史数据，而这条通知在周日发，所以「本周」用今天到本周日的
      * 剩余预报天做基准；样本不足 2 天（周日当天就是这种情况）时退回与今天比较。
      */
+    /**
+     * 取指定那天的预报。
+     *
+     * Open-Meteo 默认请求带 past_days=1（daily[0] 是昨天），QWeather 从今天开始（daily[0] 是今天），
+     * 数据起点不一致，用数组下标必然有一个供应商取错 —— 只能按日期找。
+     * 日期全部解析不了时退回数组首项，保持函数总有返回。
+     */
+    internal fun dailyFor(weather: WeatherDashboard, day: LocalDate): DailyForecast? {
+        val dated = weather.daily.mapNotNull { forecast ->
+            runCatching { LocalDate.parse(forecast.date) }.getOrNull()?.let { it to forecast }
+        }
+        if (dated.isEmpty()) return weather.daily.firstOrNull()
+        return dated.firstOrNull { (date, _) -> date == day }?.second
+    }
+
     internal fun weeklyOverview(weather: WeatherDashboard, today: LocalDate): String? {
         // 一切按日期取，不按数组下标：Open-Meteo 默认请求带 past_days=1，daily[0] 是昨天。
         // 日期解析不了的供应商退化为「数组首项是今天」，不影响两个内置供应商（都是 yyyy-MM-dd）。
