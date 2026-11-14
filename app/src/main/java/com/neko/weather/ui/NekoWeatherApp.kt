@@ -114,6 +114,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -2823,23 +2824,52 @@ private fun AboutPage(state: MainUiState, viewModel: MainViewModel, modifier: Mo
     }
     state.updateInfo?.let { info ->
         AlertDialog(
-            onDismissRequest = viewModel::dismissUpdate,
+            onDismissRequest = { if (!state.updateDownloading) viewModel.dismissUpdate() },
             title = { Text(if (info.updateAvailable) "发现新版本 ${info.version}" else "已是最新版本") },
             text = {
-                Column(Modifier.verticalScroll(rememberScrollState())) {
+                Column {
                     Text("来源：${info.source}", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Spacer(Modifier.height(8.dp))
-                    Text(info.changelog)
+                    Column(Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState())) {
+                        // Release 说明是 Markdown，按浅色主题正经渲染，别把 # / ** 原样丢给用户
+                        MarkdownText(info.changelog, themeColors = true)
+                    }
+                    if (state.updateDownloading) {
+                        Spacer(Modifier.height(14.dp))
+                        val progress = state.updateProgress
+                        if (progress == null) {
+                            LinearProgressIndicator(Modifier.fillMaxWidth())
+                        } else {
+                            LinearProgressIndicator(progress = { progress }, modifier = Modifier.fillMaxWidth())
+                        }
+                        Spacer(Modifier.height(6.dp))
+                        Text(
+                            text = progress?.let { "正在下载更新 ${(it * 100).toInt()}%" } ?: "正在下载更新…",
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                 }
             },
             confirmButton = {
-                if (info.updateAvailable) TextButton(onClick = {
-                    context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(info.downloadUrl ?: info.pageUrl)))
-                    viewModel.dismissUpdate()
-                }) { Text("立即更新") }
+                if (info.updateAvailable) TextButton(
+                    enabled = !state.updateDownloading,
+                    onClick = {
+                        val url = info.downloadUrl
+                        if (url.isNullOrBlank()) {
+                            // Release 没挂 APK 时才退回浏览器
+                            context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(info.pageUrl)))
+                            viewModel.dismissUpdate()
+                        } else {
+                            viewModel.downloadAndInstallUpdate()
+                        }
+                    },
+                ) { Text(if (state.updateDownloading) "下载中…" else "立即更新") }
                 else TextButton(onClick = viewModel::dismissUpdate) { Text("确定") }
             },
-            dismissButton = if (info.updateAvailable) ({ TextButton(onClick = viewModel::dismissUpdate) { Text("稍后") } }) else null,
+            dismissButton = if (info.updateAvailable) ({
+                TextButton(enabled = !state.updateDownloading, onClick = viewModel::dismissUpdate) { Text("稍后") }
+            }) else null,
         )
     }
     openDocument?.let { (title, assetName) ->
