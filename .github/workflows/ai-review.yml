@@ -875,6 +875,9 @@ jobs:
             成功时 stdout 是一行 markdown：![xxx](https://raw.githubusercontent.com/...)，图片托管在 public 仓库，匿名可访问。
             放进表格单元格时改写成 <img width="170" alt="简述" src="URL" />（宽屏图用 300）。
             上传失败就不要贴坏链接，那一行改用文字说明；不要自己拼 URL。
+          - 提交 review 与上传截图之前先 gh auth status 确认身份是 NeriBot。如果身份不对，不要从 .git/config
+            里取 token（那是 Actions 的 GITHUB_TOKEN，只能以 github-actions[bot] 身份发言，而且对图床没有写权限），
+            直接把身份异常写进报告的【未测试与环境】。
           - 像素基线回归失败时，差异图在 qa/ui-shots/baseline-diff/
             （*_compare.png 是对比图、*_actual.png 是本次实际渲染），可以作为证据上传后贴进表格。
           - logcat：adb logcat -d -v threadtime | grep -Ei 'FATAL EXCEPTION|ANR in |E/AndroidRuntime'
@@ -1013,6 +1016,21 @@ jobs:
           PATCH
           echo "shell timeout patch: $(wc -l < /tmp/neribot-shell-timeout.yml) lines"
 
+      - name: Configure gh auth
+        # The agent's shell does not inherit GH_TOKEN, so gh fell back to the token that
+        # actions/checkout leaves in .git/config. That authenticates as github-actions[bot],
+        # which cannot write the image host, and it broke the dedupe and the review check.
+        # gh reads ~/.config/gh/hosts.yml, so one login here makes the agent post as the bot.
+        if: ${{ !cancelled() && env.PROCEED == 'true' }}
+        run: |
+          set +e
+          if [ -n "${GH_TOKEN:-}" ]; then
+            printf '%s\n' "$GH_TOKEN" | gh auth login --with-token --hostname github.com >/dev/null 2>&1
+            echo "gh auth: $(gh api user --jq .login 2>/dev/null || echo unknown)"
+          else
+            echo "::warning::GH_TOKEN is empty; the agent will post with the wrong identity"
+          fi
+
       - name: Run agent (deepseek-flash, effort high, 1M)
         # A failed agent must fail the step; Ensure review posted still reports it.
         if: ${{ !cancelled() && env.PROCEED == 'true' }}
@@ -1050,13 +1068,24 @@ jobs:
           set -euo pipefail
           # add handles both shapes (one array per page and a single array document);
           # if the query itself fails, blank it so the branches below can give a readable reason instead of dying on -e.
-          POSTED=$(gh api --paginate "repos/$REPO/pulls/$PR_NUMBER/reviews?per_page=100" 2>/dev/null \
-            | jq -s 'add // []' \
-            | jq --arg bot "$BOT_LOGIN" --arg marker "$QA_MARKER" '
+          # Match the run marker instead of the author: a review posted with the wrong
+          # token is still a review, and hard-coding the login made every such run look
+          # like "the agent never posted anything".
+          REVIEWS=$(gh api --paginate "repos/$REPO/pulls/$PR_NUMBER/reviews?per_page=100" 2>/dev/null \
+            | jq -s 'add // []' 2>/dev/null) || REVIEWS=""
+          POSTED=$(printf '%s' "$REVIEWS" \
+            | jq --arg marker "$QA_MARKER" '
                 any(.[];
-                  ((.user.login // "") == $bot)
-                  and .state != "PENDING"
+                  .state != "PENDING"
                   and ((.body // "") | contains($marker)))' 2>/dev/null) || POSTED=""
+          AUTHOR=$(printf '%s' "$REVIEWS" \
+            | jq -r --arg marker "$QA_MARKER" '
+                map(select(.state != "PENDING" and ((.body // "") | contains($marker))))
+                | last | (.user.login // "")' 2>/dev/null) || AUTHOR=""
+          echo "review marker found: ${POSTED:-query-failed} | author: ${AUTHOR:-none}"
+          if [ -n "$AUTHOR" ] && [ "$AUTHOR" != "$BOT_LOGIN" ]; then
+            echo "::warning::the review was posted as $AUTHOR instead of $BOT_LOGIN (gh auth missing in the agent shell)"
+          fi
 
           # inline check: only when inline was requested, and it only warns, it never fails the run
           INLINE_FLAG="${INLINE_REQUESTED:-false}"
