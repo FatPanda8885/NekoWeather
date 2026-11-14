@@ -163,17 +163,50 @@ jobs:
             echo "- 最后打印简短总结（结论、已复现/未确认条数、是否已发评论）。"
           } > issue-prompt.txt
 
-      - name: Run agent (DeepSeek Harness, reproduction reasoning is model heavy, overridable by repo variables)
+      - name: Configure gh auth
+        # The agent's shell does not inherit GH_TOKEN, so gh falls back to the token that
+        # actions/checkout leaves in .git/config: that authenticates as github-actions[bot],
+        # which cannot write the image host. gh reads ~/.config/gh/hosts.yml, so logging in
+        # once here makes the agent use the bot PAT however the env gets trimmed.
+        run: |
+          set +e
+          if [ -n "${GH_TOKEN:-}" ]; then
+            printf '%s\n' "$GH_TOKEN" | gh auth login --with-token --hostname github.com >/dev/null 2>&1
+            echo "gh auth: $(gh api user --jq .login 2>/dev/null || echo unknown)"
+          else
+            echo "::warning::GH_TOKEN is empty; the agent will post with the wrong identity"
+          fi
+
+      - name: Shell timeout patch
+        # One stuck command must not eat the whole budget (see the 90 minute stalls in the
+        # review workflow); 20 minutes covers gradle and emulator boot.
+        run: |
+          set +e
+          cat > /tmp/neribot-shell-timeout.yml <<'PATCH'
+          - id: persistent-bash
+            config:
+              timeoutMs: 1200000
+          - id: persistent-pwsh
+            config:
+              timeoutMs: 1200000
+          PATCH
+          echo "shell timeout patch: $(wc -l < /tmp/neribot-shell-timeout.yml) lines"
+
+      - name: Run agent (DeepSeek Harness, effort high by default)
+        # Hard ceiling: a single investigation must never burn hours.
+        timeout-minutes: 70
         env:
           # The session id carries the run identity so it maps to the sessions/ directory in the dsh home
           NERIBOT_SESSION_ID: issue-run-${{ github.run_id }}-${{ github.run_attempt }}
           DSH_CONTEXT_WINDOW: '1000000'
           NERIBOT_MODEL: ${{ vars.NERIBOT_ISSUE_MODEL || 'deepseek-flash' }}
-          NERIBOT_EFFORT: ${{ vars.NERIBOT_ISSUE_EFFORT || 'max' }}
+          NERIBOT_EFFORT: ${{ vars.NERIBOT_ISSUE_EFFORT || 'high' }}
+          NERIBOT_DSH_PATCH: /tmp/neribot-shell-timeout.yml
         run: |
           set -uo pipefail
           set +e
-          python3 /usr/local/bin/neribot_agent.py issue-prompt.txt > issue-agent.log 2>&1
+          # 3600s hard cap on the whole agent session; the step timeout is the outer net.
+          timeout -k 30 3600 python3 /usr/local/bin/neribot_agent.py issue-prompt.txt > issue-agent.log 2>&1
           CODE=$?
           set -e
           tail -n 40 issue-agent.log || true
@@ -185,12 +218,21 @@ jobs:
         if: ${{ !cancelled() }}
         run: |
           set -euo pipefail
-          POSTED=$(gh api --paginate "repos/$REPO/issues/$ISSUE_NUMBER/comments?per_page=100" \
-            | jq -s 'add // []' \
-            | jq --arg bot "$BOT_LOGIN" --arg marker "$ISSUE_MARKER" '
-                any(.[];
-                  ((.user.login // "") == $bot)
-                  and ((.body // "") | contains($marker)))')
+          # Match the run marker instead of the author: a comment posted with the wrong
+          # token is still a report, and hard-coding the login made those runs fail.
+          COMMENTS=$(gh api --paginate "repos/$REPO/issues/$ISSUE_NUMBER/comments?per_page=100" 2>/dev/null \
+            | jq -s 'add // []' 2>/dev/null) || COMMENTS=""
+          POSTED=$(printf '%s' "$COMMENTS" \
+            | jq --arg marker "$ISSUE_MARKER" '
+                any(.[]; ((.body // "") | contains($marker)))' 2>/dev/null) || POSTED=""
+          AUTHOR=$(printf '%s' "$COMMENTS" \
+            | jq -r --arg marker "$ISSUE_MARKER" '
+                map(select((.body // "") | contains($marker)))
+                | last | (.user.login // "")' 2>/dev/null) || AUTHOR=""
+          echo "comment marker found: ${POSTED:-query-failed} | author: ${AUTHOR:-none}"
+          if [ -n "$AUTHOR" ] && [ "$AUTHOR" != "$BOT_LOGIN" ]; then
+            echo "::warning::the comment was posted as $AUTHOR instead of $BOT_LOGIN (gh auth missing in the agent shell)"
+          fi
           if [ "$POSTED" = "true" ]; then
             echo "NeriBot reproduction report posted to issue #$ISSUE_NUMBER"
             exit 0
