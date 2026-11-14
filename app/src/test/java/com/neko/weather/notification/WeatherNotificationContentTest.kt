@@ -91,6 +91,24 @@ class WeatherNotificationContentTest {
         assertTrue(text, text.contains("下降"))
     }
 
+    /** 生产默认数据形态：Open-Meteo 的 past_days=1 让 daily[0] 是昨天，不能用下标当"今天"。 */
+    @Test
+    fun weeklyOverviewHandlesPastDaysData() {
+        // 2026-11-15 是周日；daily[0] = 昨天(14日)，daily[1] = 今天(15日)，daily[2..8] = 下周一至周日
+        val days = listOf(
+            day("2026-11-14", 15.0, 25.0),                       // 昨天，晴，均温 20
+            day("2026-11-15", -5.0, 5.0),                        // 今天，晴，均温 0
+        ) + (16..19).map { day("2026-11-$it", 0.0, 10.0, condition = "小雨") } +
+            (20..22).map { day("2026-11-$it", 0.0, 10.0, condition = "晴") }
+
+        val text = WeatherNotificationPublisher.weeklyOverview(dashboard(days), LocalDate.of(2026, 11, 15))
+
+        assertNotNull(text)
+        // 下周一至周日是 4 雨 3 晴、均温 5，比今天(0)高 —— 应判为「小雨为主 + 上升」
+        assertTrue(text!!, text.contains("小雨为主"))
+        assertTrue(text, text.contains("上升"))
+    }
+
     @Test
     fun weeklyOverviewIsNullWithoutForecast() {
         val text = WeatherNotificationPublisher.weeklyOverview(dashboard(emptyList()), LocalDate.of(2026, 10, 25))

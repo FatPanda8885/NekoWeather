@@ -146,19 +146,25 @@ object WeatherNotificationPublisher {
      * 剩余预报天做基准；样本不足 2 天（周日当天就是这种情况）时退回与今天比较。
      */
     internal fun weeklyOverview(weather: WeatherDashboard, today: LocalDate): String? {
-        val nextWeek = weather.daily.drop(1).take(7)
+        // 一切按日期取，不按数组下标：Open-Meteo 默认请求带 past_days=1，daily[0] 是昨天。
+        // 日期解析不了的供应商退化为「数组首项是今天」，不影响两个内置供应商（都是 yyyy-MM-dd）。
+        val dated = weather.daily.mapIndexed { index, day ->
+            (runCatching { LocalDate.parse(day.date) }.getOrNull() ?: today.plusDays(index.toLong())) to day
+        }
+        val nextWeek = dated.filter { (date, _) -> date.isAfter(today) }.take(7).map { it.second }
         if (nextWeek.isEmpty()) return null
         val dominant = nextWeek.groupingBy { it.condition }.eachCount()
             .entries.maxByOrNull { it.value }?.key
             .orEmpty().ifBlank { nextWeek.first().condition }
 
         val weekEnd = today.with(TemporalAdjusters.nextOrSame(DayOfWeek.SUNDAY))
-        val thisWeekRest = weather.daily.filter { day ->
-            val date = runCatching { LocalDate.parse(day.date) }.getOrNull() ?: return@filter false
-            !date.isBefore(today) && !date.isAfter(weekEnd)
-        }
-        val baseline = thisWeekRest.takeIf { it.size >= 2 } ?: weather.daily.take(1)
-        if (baseline.isEmpty()) return "下周以${dominant}为主。"
+        val thisWeekRest = dated
+            .filter { (date, _) -> !date.isBefore(today) && !date.isAfter(weekEnd) }
+            .map { it.second }
+        // 周日当天「本周剩余」只剩今天，退回与今天比较；今天缺失时用第一个未来日兜底
+        val baseline = thisWeekRest.takeIf { it.size >= 2 }
+            ?: dated.firstOrNull { (date, _) -> date == today }?.second?.let { listOf(it) }
+            ?: nextWeek.take(1)
 
         val delta = meanTemperature(nextWeek) - meanTemperature(baseline)
         val trend = when {
