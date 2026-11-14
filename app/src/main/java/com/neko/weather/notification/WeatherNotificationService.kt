@@ -22,6 +22,7 @@ import com.neko.weather.data.AppTimeZone
 import com.neko.weather.data.ConfigStore
 import com.neko.weather.data.WeatherRepository
 import com.neko.weather.data.WeatherCacheStore
+import com.neko.weather.model.AppLanguage
 import com.neko.weather.model.DailyForecast
 import com.neko.weather.model.WeatherDashboard
 import com.neko.weather.model.TemperatureUnit
@@ -121,7 +122,8 @@ object WeatherNotificationPublisher {
                 notify(
                     context, 1003, "rain",
                     l(precipitationTitle(wet.condition)),
-                    l(precipitationBody(wet.time.takeLast(5), wet.condition)),
+                    // 正文按语言整句成模板，不再交给替换表拼装（见 precipitationBody 注释）
+                    precipitationBody(display.language, wet.time.takeLast(5), wet.condition) { l(it) },
                 )
                 prefs.edit().putString("rain", wetKey).apply()
             }
@@ -181,13 +183,33 @@ object WeatherNotificationPublisher {
         else -> "即将降雨"
     }
 
-    private fun precipitationBody(time: String, condition: String): String {
-        val advice = when {
-            "雪" in condition -> "路面可能湿滑，注意保暖与出行安全。"
-            "雹" in condition || "雷" in condition -> "尽量留在室内，注意安全。"
-            else -> "外出请带伞。"
+    /**
+     * 降水正文按语言整句成句。
+     *
+     * 本地化表是逐串替换，无法重排语序；若只把天气类型和建议交给表翻译，英文界面会得到
+     * 「预计 23:00 前后Snow showers，Roads may be slippery…」这类中英混排。
+     * 所以这里按语言给出完整模板，只让 [localize] 负责其中的词与句。
+     */
+    internal fun precipitationBody(
+        language: AppLanguage,
+        time: String,
+        condition: String,
+        localize: (String) -> String,
+    ): String {
+        val kind = localize(condition)
+        val advice = localize(
+            when {
+                "雪" in condition -> "路面可能湿滑，注意保暖与出行安全。"
+                "雹" in condition || "雷" in condition -> "尽量留在室内，注意安全。"
+                else -> "外出请带伞。"
+            },
+        )
+        return when (language) {
+            AppLanguage.ENGLISH -> "Expect $kind around $time. $advice"
+            AppLanguage.JAPANESE -> "$time 頃に$kind。$advice"
+            AppLanguage.SIMPLIFIED_CHINESE -> "预计 $time 前后$kind，$advice"
+            AppLanguage.TRADITIONAL_CHINESE -> localize("预计 $time 前后$kind，$advice")
         }
-        return "预计 $time 前后$condition，$advice"
     }
 
     /** 通知推送测试（仅 dev 构建入口可见）。 */

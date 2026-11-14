@@ -1,8 +1,11 @@
 package com.neko.weather.notification
 
+import com.neko.weather.model.AppLanguage
 import com.neko.weather.model.DailyForecast
 import com.neko.weather.model.WeatherDashboard
 import com.neko.weather.model.WeatherSnapshot
+import com.neko.weather.ui.localizedText
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
@@ -16,6 +19,38 @@ class WeatherNotificationContentTest {
             .forEach { assertTrue("$it 应判定为降水", WeatherNotificationPublisher.isPrecipitation(it)) }
         listOf("晴朗", "多云", "阴天", "有雾", "霾", "天气未知")
             .forEach { assertFalse("$it 不应判定为降水", WeatherNotificationPublisher.isPrecipitation(it)) }
+    }
+
+    private fun body(language: AppLanguage, time: String, condition: String) =
+        WeatherNotificationPublisher.precipitationBody(language, time, condition) { localizedText(it, language) }
+
+    @Test
+    fun chinesePrecipitationBodyIsUnchanged() {
+        assertEquals(
+            "预计 23:00 前后阵雪，路面可能湿滑，注意保暖与出行安全。",
+            body(AppLanguage.SIMPLIFIED_CHINESE, "23:00", "阵雪"),
+        )
+        assertEquals(
+            "预计 08:00 前后小雨，外出请带伞。",
+            body(AppLanguage.SIMPLIFIED_CHINESE, "08:00", "小雨"),
+        )
+    }
+
+    @Test
+    fun englishPrecipitationBodyHasNoChineseLeftovers() {
+        listOf("小雨", "阵雪", "冰雹").forEach { condition ->
+            val text = body(AppLanguage.ENGLISH, "23:00", condition)
+            assertFalse("英文正文仍含汉字：$text", text.any { it.code in 0x4E00..0x9FFF })
+            assertTrue(text, text.startsWith("Expect "))
+        }
+    }
+
+    @Test
+    fun japanesePrecipitationBodyUsesJapaneseFraming() {
+        val text = body(AppLanguage.JAPANESE, "23:00", "阵雪")
+        assertTrue(text, text.contains("頃に"))
+        assertFalse("日文正文仍残留中文框架：$text", text.contains("预计"))
+        assertFalse(text, text.contains("前后"))
     }
 
     private fun day(date: String, low: Double, high: Double, condition: String = "多云") =
