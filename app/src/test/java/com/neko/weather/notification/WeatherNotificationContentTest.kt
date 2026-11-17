@@ -11,6 +11,7 @@ import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.time.LocalDate
+import java.time.LocalDateTime
 
 class WeatherNotificationContentTest {
     @Test
@@ -136,6 +137,32 @@ class WeatherNotificationContentTest {
             "2026-11-15",
             WeatherNotificationPublisher.dailyFor(withoutPastDay, LocalDate.of(2026, 11, 15))?.date,
         )
+    }
+
+    @Test
+    fun onlyUpcomingHoursCountAsRainCandidates() {
+        val now = LocalDateTime.of(2026, 11, 15, 9, 40)
+        // 当前整点算「即将」，已经过去的小时不算
+        assertTrue(WeatherNotificationPublisher.isUpcomingHour("2026-11-15T09:00", now))
+        assertTrue(WeatherNotificationPublisher.isUpcomingHour("2026-11-15T12:00", now))
+        assertFalse(WeatherNotificationPublisher.isUpcomingHour("2026-11-15T08:00", now))
+        assertFalse(WeatherNotificationPublisher.isUpcomingHour("2026-11-14T23:00", now))
+        // 解析不了的时间按可用处理，避免误杀
+        assertTrue(WeatherNotificationPublisher.isUpcomingHour("", now))
+    }
+
+    @Test
+    fun expiredAlertsAreDropped() {
+        val now = LocalDateTime.of(2026, 11, 15, 9, 40)
+        assertTrue(WeatherNotificationPublisher.isExpired("2026-11-15T08:00:00+08:00", now))
+        assertTrue(WeatherNotificationPublisher.isExpired("2026-11-15T08:00", now))
+        assertTrue(WeatherNotificationPublisher.isExpired("2026-11-14", now))
+        assertFalse(WeatherNotificationPublisher.isExpired("2026-11-15T18:00:00+08:00", now))
+        assertFalse(WeatherNotificationPublisher.isExpired("2026-11-15T12:00", now))
+        assertFalse(WeatherNotificationPublisher.isExpired(null, now))
+        assertFalse(WeatherNotificationPublisher.isExpired("", now))
+        // 无法解析时视为未过期：宁可多推一次，也不要吞掉真实预警
+        assertFalse(WeatherNotificationPublisher.isExpired("未知时间", now))
     }
 
     @Test

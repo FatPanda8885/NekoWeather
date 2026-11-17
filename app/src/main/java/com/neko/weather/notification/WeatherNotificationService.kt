@@ -1,6 +1,7 @@
 package com.neko.weather.notification
 
 import android.Manifest
+import android.app.AlarmManager
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
@@ -24,6 +25,7 @@ import com.neko.weather.data.WeatherRepository
 import com.neko.weather.data.WeatherCacheStore
 import com.neko.weather.model.AppLanguage
 import com.neko.weather.model.DailyForecast
+import com.neko.weather.model.WeatherAlert
 import com.neko.weather.model.WeatherDashboard
 import com.neko.weather.model.TemperatureUnit
 import com.neko.weather.ui.localizedText
@@ -36,31 +38,129 @@ import java.time.DayOfWeek
 import java.time.LocalDate
 import java.time.temporal.TemporalAdjusters
 import java.time.LocalDateTime
+import java.time.OffsetDateTime
 import kotlin.math.roundToInt
 
 object WeatherNotificationScheduler {
-    private const val JOB_ID = 48102
+    private const val PERIODIC_JOB_ID = 48102
+    private const val ONESHOT_JOB_ID = 48103
+    private const val ALARM_CHECK = 48201
+    private const val ALARM_TEST = 48202
+
+    internal const val ACTION_CHECK = "com.neko.weather.action.NOTIFICATION_CHECK"
+    internal const val ACTION_TEST = "com.neko.weather.action.NOTIFICATION_TEST"
+
+    /** 例行检查间隔：降雨看未来 4 小时、预警随时可能更新，一小时一次足够且不费电。 */
+    internal const val CHECK_INTERVAL_MINUTES = 60L
+
+    private const val NEXT_CHECK_KEY = "nextCheckAt"
 
     fun sync(context: Context): Boolean = runCatching {
         createChannels(context)
         val settings = ConfigStore(context).loadNotificationSettings()
-        val scheduler = context.getSystemService(JobScheduler::class.java)
-        if (!settings.morningEnabled && !settings.weeklyEnabled && !settings.rainEnabled && !settings.alertEnabled) {
-            scheduler.cancel(JOB_ID)
+        val enabled = settings.morningEnabled || settings.weeklyEnabled || settings.rainEnabled || settings.alertEnabled
+        if (!enabled) {
+            cancelAll(context)
             return@runCatching true
         }
-        // 部分厂商 ROM 对 setPeriodic(period, flex) 的 flex 校验与 AOSP 不一致。
-        // 使用单参数版本，由系统自行批处理，避免任务注册影响应用启动。
-        val job = JobInfo.Builder(JOB_ID, ComponentName(context, WeatherNotificationJobService::class.java))
-            .setRequiredNetworkType(JobInfo.NETWORK_TYPE_ANY)
-            .setPersisted(true)
-            .setPeriodic(30 * 60 * 1000L)
-            .build()
-        scheduler.schedule(job) == JobScheduler.RESULT_SUCCESS
+        // 两条腿走路：周期 Job 兜底，闹钟负责准时。不同 ROM 对二者的态度并不一致，
+        // 只留一条都容易全灭（此前只有周期 Job，Doze 下会被推迟数小时）。
+        schedulePeriodicJob(context)
+        scheduleNextCheck(context)
+        true
     }.getOrElse { error ->
         Log.e("NekoWeather", "Unable to schedule weather notifications", error)
         false
     }
+
+    fun cancelAll(context: Context) {
+        context.getSharedPreferences("notification_history", Context.MODE_PRIVATE)
+            .edit().remove(NEXT_CHECK_KEY).apply()
+        val jobs = context.getSystemService(JobScheduler::class.java)
+        runCatching { jobs.cancel(PERIODIC_JOB_ID) }
+        runCatching { jobs.cancel(ONESHOT_JOB_ID) }
+        runCatching { alarms(context).cancel(alarmIntent(context, ALARM_CHECK, ACTION_CHECK)) }
+        runCatching { alarms(context).cancel(alarmIntent(context, ALARM_TEST, ACTION_TEST)) }
+    }
+
+    private fun schedulePeriodicJob(context: Context) {
+        // 部分厂商 ROM 对 setPeriodic(period, flex) 的 flex 校验与 AOSP 不一致。
+        // 使用单参数版本，由系统自行批处理，避免任务注册影响应用启动。
+        val job = JobInfo.Builder(PERIODIC_JOB_ID, ComponentName(context, WeatherNotificationJobService::class.java))
+            .setRequiredNetworkType(JobInfo.NETWORK_TYPE_ANY)
+            .setPersisted(true)
+            .setPeriodic(30 * 60 * 1000L)
+            .build()
+        runCatching { context.getSystemService(JobScheduler::class.java).schedule(job) }
+    }
+
+    /**
+     * 排下一次例行检查。
+     * 用 setAndAllowWhileIdle：不需要任何权限，并且能在 Doze 里被唤醒（只是不保证精确到秒）。
+     */
+    fun scheduleNextCheck(context: Context): Boolean = runCatching {
+        val prefs = context.getSharedPreferences("notification_history", Context.MODE_PRIVATE)
+        val now = System.currentTimeMillis()
+        // 同一个 PendingIntent 再 set 一次是「替换」而不是「新增」：如果每次打开应用都重排，
+        // 闹钟会被无限往后推、永远不会触发。已经排过就什么都不做。
+        if (prefs.getLong(NEXT_CHECK_KEY, 0L) > now) return@runCatching true
+        val trigger = now + CHECK_INTERVAL_MINUTES * 60_000L
+        alarms(context).setAndAllowWhileIdle(
+            AlarmManager.RTC_WAKEUP,
+            trigger,
+            alarmIntent(context, ALARM_CHECK, ACTION_CHECK),
+        )
+        prefs.edit().putLong(NEXT_CHECK_KEY, trigger).apply()
+        true
+    }.getOrElse { error ->
+        Log.e("NekoWeather", "Unable to arm notification alarm", error)
+        false
+    }
+
+    /** 广播里不做网络请求：排一个一次性 Job，真正抓数据仍在 JobService 里完成。 */
+    fun enqueueCheckNow(context: Context) {
+        val builder = JobInfo
+            .Builder(ONESHOT_JOB_ID, ComponentName(context, WeatherNotificationJobService::class.java))
+            .setRequiredNetworkType(JobInfo.NETWORK_TYPE_ANY)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            builder.setExpedited(true)
+        } else {
+            builder.setOverrideDeadline(0)
+        }
+        runCatching { context.getSystemService(JobScheduler::class.java).schedule(builder.build()) }
+    }
+
+    /**
+     * 调试用：延迟若干秒后发一条测试通知，用来验证「应用不在前台」时能否送达。
+     *
+     * 返回 true 表示用的是精确闹钟；false 表示系统不允许精确闹钟（Android 12+ 可被用户收回），
+     * 已退化为 setAndAllowWhileIdle，可能晚几分钟才到。
+     */
+    fun scheduleTestNotification(context: Context, delaySeconds: Long): Boolean {
+        createChannels(context)
+        val trigger = System.currentTimeMillis() + delaySeconds.coerceIn(1L, 3600L) * 1000L
+        val manager = alarms(context)
+        val pending = alarmIntent(context, ALARM_TEST, ACTION_TEST)
+        val exact = Build.VERSION.SDK_INT < Build.VERSION_CODES.S || manager.canScheduleExactAlarms()
+        runCatching {
+            if (exact) {
+                manager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, trigger, pending)
+            } else {
+                manager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, trigger, pending)
+            }
+        }.onFailure { Log.e("NekoWeather", "Unable to schedule test notification", it) }
+        return exact
+    }
+
+    private fun alarms(context: Context): AlarmManager = context.getSystemService(AlarmManager::class.java)
+
+    private fun alarmIntent(context: Context, requestCode: Int, action: String): PendingIntent =
+        PendingIntent.getBroadcast(
+            context,
+            requestCode,
+            Intent(context, WeatherNotificationAlarmReceiver::class.java).setAction(action),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
 
     fun createChannels(context: Context) {
         if (Build.VERSION.SDK_INT < 26) return
@@ -79,7 +179,14 @@ object WeatherNotificationScheduler {
  * 部分 ROM 会大幅推迟甚至省略周期 Job，前台刷新路径保证用户使用期间通知照常到期。
  */
 object WeatherNotificationPublisher {
-    fun publish(context: Context, weather: WeatherDashboard) {
+    /** 超过这个时长的天气数据一律不据此发通知，避免缓存数据推出早已过去的时段。 */
+    private const val DEFAULT_MAX_DATA_AGE_MINUTES = 360L
+
+    fun publish(
+        context: Context,
+        weather: WeatherDashboard,
+        maxDataAgeMinutes: Long = DEFAULT_MAX_DATA_AGE_MINUTES,
+    ) {
         if (Build.VERSION.SDK_INT >= 33 &&
             ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
         ) {
@@ -89,6 +196,16 @@ object WeatherNotificationPublisher {
         val store = ConfigStore(context)
         val settings = store.loadNotificationSettings()
         if (!settings.morningEnabled && !settings.weeklyEnabled && !settings.rainEnabled && !settings.alertEnabled) return
+
+        // 数据太旧就什么都不发：周期任务被推迟数小时后用缓存数据判定，会推出已经过去的时间段。
+        val fetchedAt = weather.current.fetchedAtMillis
+        if (fetchedAt > 0L) {
+            val ageMinutes = (System.currentTimeMillis() - fetchedAt) / 60_000L
+            if (ageMinutes > maxDataAgeMinutes) {
+                Log.i("NekoWeather", "Skip notifications: weather data is $ageMinutes min old")
+                return
+            }
+        }
         val display = store.loadDisplaySettings()
         val zone = AppTimeZone.resolve(display.timeZoneId)
         val unit = display.temperatureUnit
@@ -119,8 +236,12 @@ object WeatherNotificationPublisher {
         }
 
         if (settings.rainEnabled) {
-            // 判据是逐小时预报的天气状况本身是否属于降水（雨/雪/雹/雷），不再看降水概率
-            val wet = weather.hourly.take(4).firstOrNull { isPrecipitation(it.condition) }
+            // 判据是逐小时预报的天气状况本身是否属于降水（雨/雪/雹/雷），不再看降水概率；
+            // 同时只取尚未开始的整点，否则缓存里的旧时段会被当成「即将降雨」推出来。
+            val wet = weather.hourly
+                .filter { isUpcomingHour(it.time, now) }
+                .take(4)
+                .firstOrNull { isPrecipitation(it.condition) }
             val wetKey = wet?.time.orEmpty()
             if (wet != null && prefs.getString("rain", "") != wetKey) {
                 notify(
@@ -133,12 +254,16 @@ object WeatherNotificationPublisher {
             }
         }
 
-        if (settings.alertEnabled && weather.alerts.isNotEmpty()) {
-            val key = weather.alerts.joinToString("|") { it.title + it.expiresAt }
-            if (prefs.getString("alerts", "") != key) {
-                val first = weather.alerts.first()
-                notify(context, 1004, "alerts", "${first.severity} · ${first.title}", first.description.take(240))
-                prefs.edit().putString("alerts", key).apply()
+        if (settings.alertEnabled) {
+            // 过期预警不再推送：打开应用时一次性补发的「过时通知」主要来自这里
+            val active = weather.alerts.filterNot { isExpired(it.expiresAt, now) }
+            if (active.isNotEmpty()) {
+                val key = active.joinToString("|") { it.title + it.expiresAt }
+                if (prefs.getString("alerts", "") != key) {
+                    val first = active.first()
+                    notify(context, 1004, "alerts", "${first.severity} · ${first.title}", first.description.take(240))
+                    prefs.edit().putString("alerts", key).apply()
+                }
             }
         }
     }
@@ -156,6 +281,25 @@ object WeatherNotificationPublisher {
      * 数据起点不一致，用数组下标必然有一个供应商取错 —— 只能按日期找。
      * 日期全部解析不了时退回数组首项，保持函数总有返回。
      */
+    /** 该整点是否还没过去（含当前小时）；时间解析不了时按可用处理，避免误杀。 */
+    internal fun isUpcomingHour(time: String, now: LocalDateTime): Boolean {
+        val parsed = runCatching { LocalDateTime.parse(time) }.getOrNull() ?: return true
+        return !parsed.isBefore(now.withMinute(0).withSecond(0).withNano(0))
+    }
+
+    /**
+     * 预警是否已过期。expiresAt 有多种来源：CAP 的 ISO 带偏移串、本地日期时间、纯日期。
+     * 缺失或无法解析时视为未过期（宁可多推一次，也不要吞掉真实预警）。
+     */
+    internal fun isExpired(expiresAt: String?, now: LocalDateTime): Boolean {
+        val raw = expiresAt?.takeIf { it.isNotBlank() } ?: return false
+        val parsed = runCatching { OffsetDateTime.parse(raw).toLocalDateTime() }.getOrNull()
+            ?: runCatching { LocalDateTime.parse(raw) }.getOrNull()
+            ?: runCatching { LocalDate.parse(raw).atTime(23, 59) }.getOrNull()
+            ?: return false
+        return parsed.isBefore(now)
+    }
+
     internal fun dailyFor(weather: WeatherDashboard, day: LocalDate): DailyForecast? {
         val dated = weather.daily.mapNotNull { forecast ->
             runCatching { LocalDate.parse(forecast.date) }.getOrNull()?.let { it to forecast }
@@ -269,6 +413,20 @@ object WeatherNotificationPublisher {
     }
 }
 
+/** 闹钟入口：例行检查排一次性 Job；测试通知直接发。 */
+class WeatherNotificationAlarmReceiver : BroadcastReceiver() {
+    override fun onReceive(context: Context, intent: Intent?) {
+        val app = context.applicationContext
+        when (intent?.action) {
+            WeatherNotificationScheduler.ACTION_TEST -> WeatherNotificationPublisher.test(app)
+            WeatherNotificationScheduler.ACTION_CHECK -> {
+                WeatherNotificationScheduler.enqueueCheckNow(app)
+                WeatherNotificationScheduler.scheduleNextCheck(app)
+            }
+        }
+    }
+}
+
 class WeatherNotificationBootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent?) {
         if (intent?.action in setOf(Intent.ACTION_BOOT_COMPLETED, Intent.ACTION_MY_PACKAGE_REPLACED)) {
@@ -290,7 +448,13 @@ class WeatherNotificationJobService : JobService() {
                     // 数据还新鲜就不重复请求，但通知判定要用缓存再跑一遍：
                     // 否则周期 Job 每次都落在这个窗口里，等于整天不推任何通知
                     WeatherCacheStore(applicationContext).load(store.loadWeatherConfig())
-                        ?.let { WeatherNotificationPublisher.publish(applicationContext, it) }
+                        ?.let { cached ->
+                            WeatherNotificationPublisher.publish(
+                                applicationContext,
+                                cached,
+                                refresh.freshnessMinutes.coerceAtLeast(1).toLong(),
+                            )
+                        }
                     return@runCatching
                 }
                 val dashboard = WeatherRepository().fetch(store.loadWeatherConfig())

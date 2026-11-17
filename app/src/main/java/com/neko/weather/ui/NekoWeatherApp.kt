@@ -208,6 +208,7 @@ import com.neko.weather.data.ApiUsageInterceptor
 import com.neko.weather.data.BackupCategories
 import com.neko.weather.BuildConfig
 import com.neko.weather.notification.WeatherNotificationPublisher
+import com.neko.weather.notification.WeatherNotificationScheduler
 import com.neko.weather.ui.settings.ActionEmphasis
 import com.neko.weather.ui.settings.ChoiceOption
 import com.neko.weather.ui.settings.SettingsPanel
@@ -2712,6 +2713,8 @@ private fun BackupRestorePage(viewModel: MainViewModel, modifier: Modifier = Mod
 @Composable
 private fun NotificationSettingsPage(state: MainUiState, viewModel: MainViewModel, modifier: Modifier = Modifier) {
     val context = LocalContext.current
+    var delaySeconds by rememberSaveable { mutableStateOf("30") }
+    var delayResult by remember { mutableStateOf<String?>(null) }
     val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
     fun requestPermissionIfNeeded(enabled: Boolean) {
         if (enabled && Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
@@ -2756,6 +2759,25 @@ private fun NotificationSettingsPage(state: MainUiState, viewModel: MainViewMode
                     onClick = { WeatherNotificationPublisher.test(context) },
                     hint = "立即发送一条测试通知，用于验证通知通道",
                 )
+                TextFieldRow(
+                    label = "延迟秒数",
+                    value = delaySeconds,
+                    onValueChange = { delaySeconds = it.filter(Char::isDigit).take(4) },
+                    supportingText = "由系统闹钟定时，到点前请把应用切到后台或划掉，用来验证不在前台时能否送达。",
+                )
+                ActionRow(
+                    label = "延迟发送测试通知",
+                    onClick = {
+                        val seconds = delaySeconds.toLongOrNull()?.coerceIn(1L, 3600L) ?: 30L
+                        val exact = WeatherNotificationScheduler.scheduleTestNotification(context, seconds)
+                        delayResult = if (exact) {
+                            "已安排 $seconds 秒后发送，请立刻切到后台等待"
+                        } else {
+                            "已安排 $seconds 秒后发送，但系统未允许精确闹钟，可能延迟几分钟"
+                        }
+                    },
+                )
+                delayResult?.let { NoteRow(it) }
             }
         }
     }

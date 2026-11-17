@@ -39,6 +39,10 @@
             android:name=".notification.WeatherNotificationJobService"
             android:exported="false"
             android:permission="android.permission.BIND_JOB_SERVICE" />
+        <!-- 闹钟入口：例行检查与调试用的延迟测试通知 -->
+        <receiver
+            android:name=".notification.WeatherNotificationAlarmReceiver"
+            android:exported="false" />
         <receiver
             android:name=".notification.WeatherNotificationBootReceiver"
             android:enabled="true"
