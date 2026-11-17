@@ -112,15 +112,9 @@ object WeatherNotificationScheduler {
         if (armedAt > now && armedExact == exact) return@runCatching true
         // 授权状态变了要重排，但保留原来的触发时刻，不要借此把闹钟往后推
         val trigger = if (armedAt > now) armedAt else now + CHECK_INTERVAL_MINUTES * 60_000L
-        val manager = alarms(context)
-        val pending = alarmIntent(context, ALARM_CHECK, ACTION_CHECK)
-        if (exact) {
-            manager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, trigger, pending)
-        } else {
-            manager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, trigger, pending)
-        }
-        prefs.edit().putLong(NEXT_CHECK_KEY, trigger).putBoolean(NEXT_CHECK_EXACT_KEY, exact).apply()
-        true
+        val armed = armAlarm(context, trigger, ALARM_CHECK, ACTION_CHECK)
+        if (armed) prefs.edit().putLong(NEXT_CHECK_KEY, trigger).putBoolean(NEXT_CHECK_EXACT_KEY, exact).apply()
+        armed
     }.getOrElse { error ->
         Log.e("NekoWeather", "Unable to arm notification alarm", error)
         false
@@ -148,20 +142,34 @@ object WeatherNotificationScheduler {
     fun scheduleTestNotification(context: Context, delaySeconds: Long): Boolean {
         createChannels(context)
         val trigger = System.currentTimeMillis() + delaySeconds.coerceIn(1L, 3600L) * 1000L
-        val manager = alarms(context)
-        val pending = alarmIntent(context, ALARM_TEST, ACTION_TEST)
-        val exact = Build.VERSION.SDK_INT < Build.VERSION_CODES.S || manager.canScheduleExactAlarms()
-        runCatching {
-            if (exact) {
-                manager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, trigger, pending)
-            } else {
-                manager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, trigger, pending)
-            }
-        }.onFailure { Log.e("NekoWeather", "Unable to schedule test notification", it) }
+        val exact = NotificationDeliveryPermissions.canScheduleExactAlarms(context)
+        armAlarm(context, trigger, ALARM_TEST, ACTION_TEST)
         return exact
     }
 
     private fun alarms(context: Context): AlarmManager = context.getSystemService(AlarmManager::class.java)
+
+    /**
+     * 排一个「必须送达」的闹钟。
+     *
+     * 有精确闹钟权限时用 setAlarmClock：系统把它当作用户可见的闹钟，不受 Doze、App Standby
+     * 与多数厂商后台管控影响，是国产 ROM 上本地定时通知唯一稳定的通道。代价是状态栏会显示闹钟图标。
+     * 没有权限时退化为 setAndAllowWhileIdle（会被推迟，但至少不是完全收不到）。
+     */
+    private fun armAlarm(context: Context, triggerAtMillis: Long, requestCode: Int, action: String): Boolean =
+        runCatching {
+            val manager = alarms(context)
+            val pending = alarmIntent(context, requestCode, action)
+            if (NotificationDeliveryPermissions.canScheduleExactAlarms(context)) {
+                manager.setAlarmClock(AlarmManager.AlarmClockInfo(triggerAtMillis, null), pending)
+            } else {
+                manager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAtMillis, pending)
+            }
+            true
+        }.getOrElse { error ->
+            Log.e("NekoWeather", "Unable to arm alarm $action", error)
+            false
+        }
 
     private fun alarmIntent(context: Context, requestCode: Int, action: String): PendingIntent =
         PendingIntent.getBroadcast(
@@ -199,12 +207,16 @@ object WeatherNotificationPublisher {
         if (Build.VERSION.SDK_INT >= 33 &&
             ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
         ) {
+            NotificationDiagnostics.recordPublish(context, "跳过：没有通知权限")
             return
         }
         WeatherNotificationScheduler.createChannels(context)
         val store = ConfigStore(context)
         val settings = store.loadNotificationSettings()
-        if (!settings.morningEnabled && !settings.weeklyEnabled && !settings.rainEnabled && !settings.alertEnabled) return
+        if (!settings.morningEnabled && !settings.weeklyEnabled && !settings.rainEnabled && !settings.alertEnabled) {
+            NotificationDiagnostics.recordPublish(context, "跳过：通知开关全关")
+            return
+        }
 
         // 数据太旧就什么都不发：周期任务被推迟数小时后用缓存数据判定，会推出已经过去的时间段。
         val fetchedAt = weather.current.fetchedAtMillis
@@ -212,6 +224,7 @@ object WeatherNotificationPublisher {
             val ageMinutes = (System.currentTimeMillis() - fetchedAt) / 60_000L
             if (ageMinutes > maxDataAgeMinutes) {
                 Log.i("NekoWeather", "Skip notifications: weather data is $ageMinutes min old")
+                NotificationDiagnostics.recordPublish(context, "跳过：天气数据已过期 $ageMinutes 分钟")
                 return
             }
         }
@@ -222,6 +235,7 @@ object WeatherNotificationPublisher {
         val prefs = context.getSharedPreferences("notification_history", Context.MODE_PRIVATE)
         val now = LocalDateTime.now(zone)
         val today = LocalDate.now(zone).toString()
+        var sent = 0
 
         if (settings.morningEnabled && now.hour in 6..10 && prefs.getString("morning", "") != today) {
             val current = weather.current
@@ -235,12 +249,14 @@ object WeatherNotificationPublisher {
                 l("${current.condition} ${formatTemperature(current.temperature, unit)}$range"),
             )
             prefs.edit().putString("morning", today).apply()
+            sent++
         }
 
         if (settings.weeklyEnabled && now.dayOfWeek == DayOfWeek.SUNDAY && now.hour in 8..14 && prefs.getString("weekly", "") != today) {
             weeklyOverview(weather, now.toLocalDate())?.let { summary ->
                 notify(context, 1002, "forecast", l("下周天气速览"), l(summary))
                 prefs.edit().putString("weekly", today).apply()
+                sent++
             }
         }
 
@@ -260,6 +276,7 @@ object WeatherNotificationPublisher {
                     precipitationBody(display.language, wet.time.takeLast(5), wet.condition) { l(it) },
                 )
                 prefs.edit().putString("rain", wetKey).apply()
+                sent++
             }
         }
 
@@ -272,9 +289,15 @@ object WeatherNotificationPublisher {
                     val first = active.first()
                     notify(context, 1004, "alerts", "${first.severity} · ${first.title}", first.description.take(240))
                     prefs.edit().putString("alerts", key).apply()
+                    sent++
                 }
             }
         }
+
+        NotificationDiagnostics.recordPublish(
+            context,
+            if (sent > 0) "已发送 $sent 条通知" else "检查完成，无到期通知",
+        )
     }
 
     /**
@@ -429,6 +452,7 @@ class WeatherNotificationAlarmReceiver : BroadcastReceiver() {
         when (intent?.action) {
             WeatherNotificationScheduler.ACTION_TEST -> WeatherNotificationPublisher.test(app)
             WeatherNotificationScheduler.ACTION_CHECK -> {
+                NotificationDiagnostics.recordFire(app)
                 WeatherNotificationScheduler.enqueueCheckNow(app)
                 WeatherNotificationScheduler.scheduleNextCheck(app)
             }

@@ -208,6 +208,7 @@ import com.neko.weather.data.ApiUsageInterceptor
 import com.neko.weather.data.BackupCategories
 import com.neko.weather.BuildConfig
 import com.neko.weather.notification.NotificationDeliveryPermissions
+import com.neko.weather.notification.NotificationDiagnostics
 import com.neko.weather.notification.WeatherNotificationPublisher
 import com.neko.weather.notification.WeatherNotificationScheduler
 import com.neko.weather.ui.settings.ActionEmphasis
@@ -2728,6 +2729,16 @@ private fun NotificationSettingsPage(state: MainUiState, viewModel: MainViewMode
     }
     val exactAlarms = remember(permissionRevision) { NotificationDeliveryPermissions.canScheduleExactAlarms(context) }
     val batteryExempt = remember(permissionRevision) { NotificationDeliveryPermissions.isIgnoringBatteryOptimizations(context) }
+    val diagFire = remember(permissionRevision) { NotificationDiagnostics.lastFireAt(context) }
+    val diagResult = remember(permissionRevision) { NotificationDiagnostics.lastResult(context) }
+    val diagNext = remember(permissionRevision) { NotificationDiagnostics.nextCheckAt(context) }
+    fun clockText(millis: Long): String = if (millis <= 0L) {
+        "从未"
+    } else {
+        java.time.Instant.ofEpochMilli(millis)
+            .atZone(java.time.ZoneId.systemDefault())
+            .format(java.time.format.DateTimeFormatter.ofPattern("MM-dd HH:mm:ss"))
+    }
     val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
     fun requestPermissionIfNeeded(enabled: Boolean) {
         if (enabled && Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
@@ -2819,6 +2830,16 @@ private fun NotificationSettingsPage(state: MainUiState, viewModel: MainViewMode
                     },
                 )
                 delayResult?.let { NoteRow(it) }
+                NoteRow("上次闹钟触发：${clockText(diagFire)}")
+                NoteRow("上次检查结果：${diagResult.ifBlank { "尚未执行" }}")
+                NoteRow(
+                    when {
+                        diagNext <= 0L -> "下次检查：未安排"
+                        diagNext < System.currentTimeMillis() ->
+                            "下次检查：${clockText(diagNext)}（已过点却没触发 → 闹钟被系统丢弃）"
+                        else -> "下次检查：${clockText(diagNext)}"
+                    },
+                )
             }
         }
     }
