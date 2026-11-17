@@ -63,6 +63,12 @@ android {
                 "proguard-rules.pro",
             )
         }
+        // 调试包与正式包共存：包名加 .debug 后缀，签名不同也能同时安装，
+        // 不必为了装调试包而卸载正式版（卸载会丢掉本地配置）。
+        debug {
+            applicationIdSuffix = ".debug"
+            versionNameSuffix = "-debug"
+        }
     }
 
     compileOptions {
