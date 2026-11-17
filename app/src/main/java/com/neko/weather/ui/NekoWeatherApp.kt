@@ -209,6 +209,7 @@ import com.neko.weather.data.BackupCategories
 import com.neko.weather.BuildConfig
 import com.neko.weather.notification.NotificationDeliveryPermissions
 import com.neko.weather.notification.NotificationDiagnostics
+import com.neko.weather.notification.NotificationKeepAlive
 import com.neko.weather.notification.WeatherNotificationPublisher
 import com.neko.weather.notification.WeatherNotificationScheduler
 import com.neko.weather.ui.settings.ActionEmphasis
@@ -2729,6 +2730,7 @@ private fun NotificationSettingsPage(state: MainUiState, viewModel: MainViewMode
     }
     val exactAlarms = remember(permissionRevision) { NotificationDeliveryPermissions.canScheduleExactAlarms(context) }
     val batteryExempt = remember(permissionRevision) { NotificationDeliveryPermissions.isIgnoringBatteryOptimizations(context) }
+    val keepAlive = remember(permissionRevision) { NotificationKeepAlive.isEnabled(context) }
     val diagFire = remember(permissionRevision) { NotificationDiagnostics.lastFireAt(context) }
     val diagResult = remember(permissionRevision) { NotificationDiagnostics.lastResult(context) }
     val diagNext = remember(permissionRevision) { NotificationDiagnostics.nextCheckAt(context) }
@@ -2796,6 +2798,15 @@ private fun NotificationSettingsPage(state: MainUiState, viewModel: MainViewMode
                 },
                 trailingText = if (batteryExempt) "已开启" else null,
                 onClick = if (batteryExempt) null else ({ NotificationDeliveryPermissions.requestIgnoreBatteryOptimizations(context) }),
+            )
+            SwitchRow(
+                title = "常驻通知保活",
+                description = "通知栏保留一条低优先级通知，让后台提醒在最激进的系统上也能准时送达",
+                checked = keepAlive,
+                onCheckedChange = {
+                    NotificationKeepAlive.setEnabled(context, it)
+                    permissionRevision++
+                },
             )
             Entry(
                 title = "打开系统应用设置",

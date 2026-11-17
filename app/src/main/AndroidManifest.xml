@@ -13,6 +13,9 @@
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
     <!-- 引导用户把应用加入电池优化白名单，否则部分 ROM 会直接杀掉后台、闹钟不送达 -->
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+    <!-- 常驻保活：前台服务让检查循环在国产 ROM 上存活 -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
 
     <!-- Android 11+ 包可见性：不声明该 queries 就发现/绑定不了系统 TTS 引擎服务，
          TextToSpeech 初始化会一律失败（系统设置不受此限制，因此那里可以正常试听） -->
@@ -39,6 +42,14 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.NekoWeather"
         android:usesCleartextTraffic="false">
+        <service
+            android:name=".notification.NotificationKeepAliveService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="weather_notification" />
+        </service>
         <service
             android:name=".notification.WeatherNotificationJobService"
             android:exported="false"

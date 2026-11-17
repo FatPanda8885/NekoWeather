@@ -47,6 +47,8 @@ object WeatherNotificationScheduler {
     private const val ALARM_CHECK = 48201
     private const val ALARM_TEST = 48202
 
+    const val CHANNEL_KEEP_ALIVE = "keepalive"
+
     internal const val ACTION_CHECK = "com.neko.weather.action.NOTIFICATION_CHECK"
     internal const val ACTION_TEST = "com.neko.weather.action.NOTIFICATION_TEST"
 
@@ -68,6 +70,7 @@ object WeatherNotificationScheduler {
         // 只留一条都容易全灭（此前只有周期 Job，Doze 下会被推迟数小时）。
         schedulePeriodicJob(context)
         scheduleNextCheck(context)
+        NotificationKeepAlive.sync(context)
         true
     }.getOrElse { error ->
         Log.e("NekoWeather", "Unable to schedule weather notifications", error)
@@ -187,6 +190,7 @@ object WeatherNotificationScheduler {
             NotificationChannel("forecast", localizedText("天气提醒", language), NotificationManager.IMPORTANCE_DEFAULT),
             NotificationChannel("rain", localizedText("降雨提醒", language), NotificationManager.IMPORTANCE_HIGH),
             NotificationChannel("alerts", localizedText("气象灾害预警", language), NotificationManager.IMPORTANCE_HIGH),
+            NotificationChannel(CHANNEL_KEEP_ALIVE, localizedText("后台运行", language), NotificationManager.IMPORTANCE_MIN),
         ).forEach(manager::createNotificationChannel)
     }
 }
@@ -468,32 +472,41 @@ class WeatherNotificationBootReceiver : BroadcastReceiver() {
     }
 }
 
+/** 抓一次天气并做通知判定，供 JobService 与前台保活服务共用。 */
+internal object WeatherNotificationWork {
+    suspend fun runOnce(context: Context) {
+        runCatching {
+            val store = ConfigStore(context)
+            val refresh = store.loadWeatherRefreshSettings()
+            val age = System.currentTimeMillis() - store.loadLastWeatherUpdateMillis()
+            if (refresh.freshnessGuardEnabled && age in 0 until refresh.freshnessMinutes * 60_000L) {
+                // 数据还新鲜就不重复请求，但通知判定要用缓存再跑一遍：
+                // 否则每次检查都落在这个窗口里，等于整天不推任何通知
+                WeatherCacheStore(context).load(store.loadWeatherConfig())
+                    ?.let { cached ->
+                        WeatherNotificationPublisher.publish(
+                            context,
+                            cached,
+                            refresh.freshnessMinutes.coerceAtLeast(1).toLong(),
+                        )
+                    }
+                return@runCatching
+            }
+            val dashboard = WeatherRepository().fetch(store.loadWeatherConfig())
+            store.saveLastWeatherUpdateMillis(dashboard.current.fetchedAtMillis)
+            WeatherNotificationPublisher.publish(context, dashboard)
+        }.onFailure {
+            NotificationDiagnostics.recordPublish(context, "检查失败：${it.message ?: it::class.java.simpleName}")
+        }
+    }
+}
+
 class WeatherNotificationJobService : JobService() {
     private val scope = CoroutineScope(Job() + Dispatchers.IO)
 
     override fun onStartJob(params: JobParameters): Boolean {
         scope.launch {
-            runCatching {
-                val store = ConfigStore(applicationContext)
-                val refresh = store.loadWeatherRefreshSettings()
-                val age = System.currentTimeMillis() - store.loadLastWeatherUpdateMillis()
-                if (refresh.freshnessGuardEnabled && age in 0 until refresh.freshnessMinutes * 60_000L) {
-                    // 数据还新鲜就不重复请求，但通知判定要用缓存再跑一遍：
-                    // 否则周期 Job 每次都落在这个窗口里，等于整天不推任何通知
-                    WeatherCacheStore(applicationContext).load(store.loadWeatherConfig())
-                        ?.let { cached ->
-                            WeatherNotificationPublisher.publish(
-                                applicationContext,
-                                cached,
-                                refresh.freshnessMinutes.coerceAtLeast(1).toLong(),
-                            )
-                        }
-                    return@runCatching
-                }
-                val dashboard = WeatherRepository().fetch(store.loadWeatherConfig())
-                store.saveLastWeatherUpdateMillis(dashboard.current.fetchedAtMillis)
-                WeatherNotificationPublisher.publish(applicationContext, dashboard)
-            }
+            WeatherNotificationWork.runOnce(applicationContext)
             jobFinished(params, false)
         }
         return true
