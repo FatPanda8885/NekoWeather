@@ -54,6 +54,7 @@ object WeatherNotificationScheduler {
     internal const val CHECK_INTERVAL_MINUTES = 60L
 
     private const val NEXT_CHECK_KEY = "nextCheckAt"
+    private const val NEXT_CHECK_EXACT_KEY = "nextCheckExact"
 
     fun sync(context: Context): Boolean = runCatching {
         createChannels(context)
@@ -96,21 +97,29 @@ object WeatherNotificationScheduler {
 
     /**
      * 排下一次例行检查。
-     * 用 setAndAllowWhileIdle：不需要任何权限，并且能在 Doze 里被唤醒（只是不保证精确到秒）。
+     *
+     * 有精确闹钟权限时用 setExactAndAllowWhileIdle（Doze 也能准点唤醒）；
+     * 没权限（Android 14 起默认拒绝）时退化为 setAndAllowWhileIdle，仍会送达但可能延后。
      */
     fun scheduleNextCheck(context: Context): Boolean = runCatching {
         val prefs = context.getSharedPreferences("notification_history", Context.MODE_PRIVATE)
         val now = System.currentTimeMillis()
+        val exact = NotificationDeliveryPermissions.canScheduleExactAlarms(context)
+        val armedAt = prefs.getLong(NEXT_CHECK_KEY, 0L)
+        val armedExact = prefs.getBoolean(NEXT_CHECK_EXACT_KEY, false)
         // 同一个 PendingIntent 再 set 一次是「替换」而不是「新增」：如果每次打开应用都重排，
-        // 闹钟会被无限往后推、永远不会触发。已经排过就什么都不做。
-        if (prefs.getLong(NEXT_CHECK_KEY, 0L) > now) return@runCatching true
-        val trigger = now + CHECK_INTERVAL_MINUTES * 60_000L
-        alarms(context).setAndAllowWhileIdle(
-            AlarmManager.RTC_WAKEUP,
-            trigger,
-            alarmIntent(context, ALARM_CHECK, ACTION_CHECK),
-        )
-        prefs.edit().putLong(NEXT_CHECK_KEY, trigger).apply()
+        // 闹钟会被无限往后推、永远不会触发。已排且授权状态没变就什么都不做。
+        if (armedAt > now && armedExact == exact) return@runCatching true
+        // 授权状态变了要重排，但保留原来的触发时刻，不要借此把闹钟往后推
+        val trigger = if (armedAt > now) armedAt else now + CHECK_INTERVAL_MINUTES * 60_000L
+        val manager = alarms(context)
+        val pending = alarmIntent(context, ALARM_CHECK, ACTION_CHECK)
+        if (exact) {
+            manager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, trigger, pending)
+        } else {
+            manager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, trigger, pending)
+        }
+        prefs.edit().putLong(NEXT_CHECK_KEY, trigger).putBoolean(NEXT_CHECK_EXACT_KEY, exact).apply()
         true
     }.getOrElse { error ->
         Log.e("NekoWeather", "Unable to arm notification alarm", error)

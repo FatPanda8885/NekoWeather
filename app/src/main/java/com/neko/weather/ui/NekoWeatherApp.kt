@@ -207,6 +207,7 @@ import com.neko.weather.data.ApiQuota
 import com.neko.weather.data.ApiUsageInterceptor
 import com.neko.weather.data.BackupCategories
 import com.neko.weather.BuildConfig
+import com.neko.weather.notification.NotificationDeliveryPermissions
 import com.neko.weather.notification.WeatherNotificationPublisher
 import com.neko.weather.notification.WeatherNotificationScheduler
 import com.neko.weather.ui.settings.ActionEmphasis
@@ -2715,6 +2716,18 @@ private fun NotificationSettingsPage(state: MainUiState, viewModel: MainViewMode
     val context = LocalContext.current
     var delaySeconds by rememberSaveable { mutableStateOf("30") }
     var delayResult by remember { mutableStateOf<String?>(null) }
+    // 用户可能刚从系统设置页返回，回来时重新读取授权状态
+    var permissionRevision by remember { mutableIntStateOf(0) }
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) permissionRevision++
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+    val exactAlarms = remember(permissionRevision) { NotificationDeliveryPermissions.canScheduleExactAlarms(context) }
+    val batteryExempt = remember(permissionRevision) { NotificationDeliveryPermissions.isIgnoringBatteryOptimizations(context) }
     val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
     fun requestPermissionIfNeeded(enabled: Boolean) {
         if (enabled && Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
@@ -2750,6 +2763,34 @@ private fun NotificationSettingsPage(state: MainUiState, viewModel: MainViewMode
                 onCheckedChange = {
                     viewModel.updateNotificationSettings(state.notificationSettings.copy(alertEnabled = it)); requestPermissionIfNeeded(it)
                 },
+            )
+        }
+        Group("后台送达", "系统会拦截后台通知，这两项需要手动授权，否则可能一条都收不到") {
+            Entry(
+                title = "允许精确闹钟",
+                description = if (exactAlarms) {
+                    "已允许，通知可以准点触发"
+                } else {
+                    "未允许：系统会推迟闹钟，可能晚几分钟到几小时"
+                },
+                trailingText = if (exactAlarms) "已开启" else null,
+                onClick = if (exactAlarms) null else ({ NotificationDeliveryPermissions.requestExactAlarms(context) }),
+            )
+            Entry(
+                title = "忽略电池优化",
+                description = if (batteryExempt) {
+                    "已加入白名单"
+                } else {
+                    "未加入：部分系统会直接杀掉后台，闹钟完全不会触发"
+                },
+                trailingText = if (batteryExempt) "已开启" else null,
+                onClick = if (batteryExempt) null else ({ NotificationDeliveryPermissions.requestIgnoreBatteryOptimizations(context) }),
+            )
+            Entry(
+                title = "打开系统应用设置",
+                description = "ColorOS / MIUI 等还需在应用详情里打开「自启动」「允许后台活动」",
+                showChevron = true,
+                onClick = { NotificationDeliveryPermissions.openAppDetails(context) },
             )
         }
         if (BuildConfig.DEBUG) {
